@@ -1,56 +1,48 @@
-# Welcome to your Expo app 👋
+# Termwise
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+**Drop in every syllabus. Get a semester you can actually survive.**
 
-## Get started
+Professors hand out 15-page syllabi with reading schedules, pop-quiz warnings, and papers that all land the same
+week. Termwise reads them for you — PDF, Word, photos of a printout, or straight from Canvas — and turns the whole
+school year into a paced, load-balanced plan.
 
-1. Install dependencies
+## What it does
 
-   ```bash
-   npm install
-   ```
+- **Reads any syllabus.** PDF, DOCX, phone photos (multi-page), pasted text, or the Canvas syllabus page. Claude
+  extracts course info, grading weights, the grade scale, every deadline (resolving "Week 5, Tuesday"), readings with
+  chapters and page ranges, holidays and breaks, and pop-quiz policies, then flags anything it couldn't pin down.
+  You review and edit everything before it's saved, and you can enter or fix any of it by hand.
+- **Canvas import.** Connect Canvas to pull courses, assignments with due and lock dates, assignment-group weights, and
+  your scores — and cross-check them against the syllabus ("Canvas locks Thu 11:59 PM, syllabus says Fri").
+  Blackboard, Moodle, and other LMSs connect through their calendar feeds for the same discrepancy checks.
+- **One calendar for the whole year.** Every course merged into a master calendar, with breaks deduplicated across
+  syllabi and conflicts flagged (two exams the same day, a deadline on a holiday).
+- **Red-zone weeks.** A weekly stress score (calm → busy → heavy → red) and alerts when three major deadlines land
+  within 48 hours.
+- **Paced reading.** "Read Chapters 4–7 by Tuesday" becomes bite-sized daily page targets using your textbook's
+  chapter map (snap a photo of the table of contents) and your reading speed.
+- **Buffer schedules.** Major papers and projects get early start dates and milestone check-ins (a full-draft check-in
+  two weeks out for big ones); exams get study ramps; everything fits inside your daily study time.
+- **Missed something?** Mark it missed and the remaining work is spread over the days you have left — no pile-ups.
+- **Focus mode.** A Pomodoro timer tied to today's plan ("Study 25 mins for PSY 101 Quiz 1") and a calm morning
+  notification with just your top 3 actions.
+- **Grades.** Enter scores (or pull them from Canvas), see where you stand, ask "What do I need on the final?", and play
+  out scenarios.
+- **Sync everywhere.** Apple Calendar / Reminders on device, two-way Google Calendar / Tasks and Outlook / To Do, or a
+  subscribable iCal feed. Deadlines go in as all-day events or tasks.
+- **Study groups.** Share a course's parsed timeline as a link; classmates import it without re-uploading (grades are
+  never shared).
 
-2. Start the app
+Neo-brutalist design with light and dark mode.
 
-   ```bash
-   npx expo start
-   ```
+## Stack
 
-In the output, you'll find options to open the app in a
+Expo SDK 58 · React Native 0.88 · Expo Router · TypeScript · TanStack Query · Supabase (Postgres + RLS, Auth with
+Sign in with Apple, Storage, Realtime, Deno Edge Functions) · Claude Opus 5.5 for document parsing · Vitest.
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+## Docs
 
-You can start developing by editing the files inside the **src/app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
-
-```bash
-npm run reset-project
-```
-
-This command will move the starter code to the **example** directory and create a blank **src/app** directory where you can start developing.
-
-### Other setup steps
-
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
-
-## Learn more
-
-To learn more about developing your project with Expo, look at the following resources:
-
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+- [Setup, run, and ship](docs/SETUP.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Scheduling engine rules](docs/ENGINE.md)
+- [Design system](docs/DESIGN.md)
