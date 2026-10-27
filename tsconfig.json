@@ -8,13 +8,24 @@
       ],
       "@/assets/*": [
         "./assets/*"
+      ],
+      "@shared/*": [
+        "./supabase/functions/_shared/*"
       ]
-    }
+    },
+    "noEmit": true,
+    "allowImportingTsExtensions": true
   },
   "include": [
     "**/*.ts",
     "**/*.tsx",
     ".expo/types/**/*.ts",
     "expo-env.d.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "supabase/functions/**",
+    "scripts/**",
+    "dist"
   ]
 }

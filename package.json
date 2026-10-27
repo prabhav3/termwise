@@ -3,6 +3,8 @@
   "version": "1.0.0",
   "main": "expo-router/entry",
   "dependencies": {
+    "@expo-google-fonts/archivo-black": "^0.4.1",
+    "@expo-google-fonts/space-grotesk": "^0.4.1",
     "@expo/ui": "~58.0.23",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native-community/datetimepicker": "9.2.1",
@@ -59,11 +61,17 @@
   },
   "scripts": {
     "start": "expo start",
-    "reset-project": "node ./scripts/reset-project.js",
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check:db": "node scripts/check-migrations.mjs",
+    "check:functions": "node scripts/check-functions.mjs",
+    "check:bundle": "expo export --platform ios --output-dir dist --clear",
+    "check": "npm run typecheck && npm run test && npm run check:db && npm run check:functions"
   },
   "private": true
 }
