@@ -22,5 +22,7 @@ export { SegmentedControl, type SegmentedControlProps, type SegmentOption } from
 export { Sheet, type SheetProps } from './Sheet';
 export { Stepper, type StepperProps } from './Stepper';
 export { StressPill, stressLabel, type StressPillProps } from './StressPill';
+export { TextField, type TextFieldProps } from './TextField';
 export { ToastProvider, useToast, type ToastOptions, type ToastTone } from './Toast';
 export { Toggle, type ToggleProps } from './Toggle';
+export { Wordmark, type WordmarkProps } from './Wordmark';

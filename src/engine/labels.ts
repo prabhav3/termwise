@@ -57,7 +57,7 @@ function chaptersOf(pieces: PageSegment[]): string | null {
 
 /** "101–126", "10–11, 15" — consecutive pieces are joined into one range. */
 function pageText(pieces: PageSegment[]): string {
-  const ranges: Array<{ start: number; end: number }> = [];
+  const ranges: { start: number; end: number }[] = [];
   for (const piece of pieces) {
     const last = ranges[ranges.length - 1];
     if (last && last.end + 1 === piece.start) last.end = piece.end;

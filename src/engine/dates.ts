@@ -91,7 +91,7 @@ export function compareDates(a: ISODate, b: ISODate): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-export function minDate(...dates: Array<ISODate | null | undefined>): ISODate | null {
+export function minDate(...dates: (ISODate | null | undefined)[]): ISODate | null {
   let result: ISODate | null = null;
   for (const date of dates) {
     if (date != null && (result === null || date < result)) result = date;
@@ -99,7 +99,7 @@ export function minDate(...dates: Array<ISODate | null | undefined>): ISODate | 
   return result;
 }
 
-export function maxDate(...dates: Array<ISODate | null | undefined>): ISODate | null {
+export function maxDate(...dates: (ISODate | null | undefined)[]): ISODate | null {
   let result: ISODate | null = null;
   for (const date of dates) {
     if (date != null && (result === null || date > result)) result = date;

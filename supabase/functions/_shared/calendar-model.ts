@@ -510,7 +510,8 @@ export function planCalendarSync(input: PlanInput): SyncPlan {
   for (const link of input.links) {
     const desired = desiredByKey.get(link.key);
     if (!desired || link.external_kind !== input.kind) {
-      if (observe(link.external_id) === 'gone') plan.dropLinks.push(link);
+      // The snapshot only covers the current kind's container, so it says nothing about the other.
+      if (link.external_kind === input.kind && observe(link.external_id) === 'gone') plan.dropLinks.push(link);
       else plan.remove.push(link);
       continue;
     }

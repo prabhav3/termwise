@@ -86,7 +86,7 @@ export function triageForDate(
     for (const zoneItem of zone.items) redZonePrep.add(zoneItem.id);
   }
 
-  const ranked: Array<{ action: TriageAction; due: ISODate | null; itemTitle: string }> = [];
+  const ranked: { action: TriageAction; due: ISODate | null; itemTitle: string }[] = [];
   for (const item of plan.annotated) {
     if (!isOpen(item) || courseById.get(item.course_id)?.archived === true) continue;
     const todays = blocksToday.get(item.id) ?? [];

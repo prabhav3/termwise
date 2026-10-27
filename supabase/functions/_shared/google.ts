@@ -224,7 +224,7 @@ export class GoogleCalendarAdapter implements CalendarAdapter {
     return created.id;
   }
 
-  async snapshot(
+  snapshot(
     kind: ExternalKind,
     containerId: string,
     cursor: string | null,

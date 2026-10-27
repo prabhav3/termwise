@@ -2,6 +2,7 @@ import { isAuthError, isAuthRetryableFetchError, type Session, type User } from 
 import { useQuery } from '@tanstack/react-query';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import * as Crypto from 'expo-crypto';
+import * as Linking from 'expo-linking';
 import { createContext, use, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Platform } from 'react-native';
 
@@ -44,6 +45,32 @@ export interface AuthContextValue {
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
+
+// ---- form validation (shared by the auth screens) --------------------------------------------
+
+export const MIN_PASSWORD_LENGTH = 8;
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
+/** Student-facing problem with an email address, or null when it looks fine. */
+export function validateEmail(email: string): string | null {
+  const value = email.trim();
+  if (!value) return 'Enter your email address.';
+  if (!EMAIL.test(value)) return "That doesn't look like an email address.";
+  return null;
+}
+
+export function validateNewPassword(password: string): string | null {
+  if (password.length < MIN_PASSWORD_LENGTH) return `Use at least ${MIN_PASSWORD_LENGTH} characters.`;
+  if (!/[a-z]/i.test(password) || !/\d/.test(password)) return 'Mix letters and at least one number.';
+  return null;
+}
+
+export function validateDisplayName(name: string): string | null {
+  const value = name.trim();
+  if (!value) return 'Tell us what to call you.';
+  if (value.length > 60) return 'Keep it under 60 characters.';
+  return null;
+}
 
 /** Friendly copy for Supabase Auth failures. */
 function authError(error: unknown, fallback: string): AppError {
@@ -180,7 +207,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const { data, error } = await supabase.auth.signUp({
           email: email.trim(),
           password,
-          options: { data: { display_name: displayName.trim() } },
+          options: {
+            data: { display_name: displayName.trim() },
+            emailRedirectTo: Linking.createURL('/auth-callback'),
+          },
         });
         if (error) throw authError(error, "Couldn't create your account. Please try again.");
         return { needsConfirmation: data.session === null };
@@ -222,7 +252,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return 'signedIn';
       },
       sendPasswordReset: async (email) => {
-        const { error } = await supabase.auth.resetPasswordForEmail(email.trim());
+        const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+          redirectTo: Linking.createURL('/reset-password'),
+        });
         if (error) throw authError(error, "Couldn't send the reset email. Please try again.");
       },
       signOut: async () => {

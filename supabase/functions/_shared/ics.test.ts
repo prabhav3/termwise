@@ -1,5 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { buildIcs, buildVTimezone, escapeText, findTransitions, foldLine, normalizeTzid, parseIcs, toLocal, unescapeText } from './ics.ts';
+import {
+  buildIcs,
+  buildVTimezone,
+  cleanFeedTitle,
+  escapeText,
+  feedCourseLabel,
+  findTransitions,
+  foldLine,
+  normalizeTzid,
+  parseIcs,
+  toLocal,
+  unescapeText,
+} from './ics.ts';
 
 const encoder = new TextEncoder();
 
@@ -155,5 +167,25 @@ describe('parseIcs tolerance', () => {
     expect(normalizeTzid('/America/New_York')).toBe('America/New_York');
     expect(normalizeTzid('Pacific Standard Time')).toBe('America/Los_Angeles');
     expect(normalizeTzid('Nowhere/Special')).toBeNull();
+  });
+});
+
+describe('LMS feed conventions', () => {
+  it('finds the course in CATEGORIES or a summary prefix', () => {
+    expect(feedCourseLabel({ summary: 'Assignment 1 is due', categories: ['PSY101-F26'] })).toEqual({ label: 'PSY101-F26', title: 'Assignment 1 is due' });
+    expect(feedCourseLabel({ summary: '[BIO 210] Lab report', categories: [] })).toEqual({ label: 'BIO 210', title: 'Lab report' });
+    expect(feedCourseLabel({ summary: 'PSY 101-02: Quiz 2', categories: ['Assignment'] })).toEqual({ label: 'PSY 101-02', title: 'Quiz 2' });
+    expect(feedCourseLabel({ summary: 'CS-1301 - Project 1', categories: [] })).toEqual({ label: 'CS-1301', title: 'Project 1' });
+    expect(feedCourseLabel({ summary: 'Quiz 12: Memory', categories: [] })).toEqual({ label: null, title: 'Quiz 12: Memory' });
+    expect(feedCourseLabel({ summary: 'Midterm review', categories: ['course'] })).toEqual({ label: null, title: 'Midterm review' });
+  });
+
+  it('cleans LMS boilerplate from titles', () => {
+    expect(cleanFeedTitle('Essay 1 is due')).toEqual({ title: 'Essay 1', isOpening: false });
+    expect(cleanFeedTitle('Quiz 2 closes')).toEqual({ title: 'Quiz 2', isOpening: false });
+    expect(cleanFeedTitle('Quiz 2 opens')).toEqual({ title: 'Quiz 2', isOpening: true });
+    expect(cleanFeedTitle('Due: Research Paper')).toEqual({ title: 'Research Paper', isOpening: false });
+    expect(cleanFeedTitle('Project (Due)')).toEqual({ title: 'Project', isOpening: false });
+    expect(cleanFeedTitle('Due')).toEqual({ title: 'Due', isOpening: false });
   });
 });

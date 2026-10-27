@@ -26,8 +26,11 @@ export const supabase = createClient<Database>(SUPABASE_URL, publishableKey, {
     storage: AsyncStorage,
     autoRefreshToken: true,
     persistSession: true,
-    // Native apps never receive sessions in a URL fragment.
+    // Native apps never receive sessions in a URL fragment. Email links (sign-up confirmation,
+    // password reset) carry a PKCE `code` that src/app/auth-callback.tsx and
+    // src/app/reset-password.tsx exchange for a session.
     detectSessionInUrl: false,
+    flowType: 'pkce',
   },
 });
 

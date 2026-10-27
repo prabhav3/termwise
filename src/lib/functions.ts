@@ -88,10 +88,12 @@ export function toAppError(error: unknown): AppError {
   if (isPostgrestLike(error)) {
     switch (error.code) {
       case 'PGRST116':
+      case 'P0002':
         return new AppError('not_found', "We couldn't find that. It may have been deleted.", { cause: error });
       case '23505':
         return new AppError('conflict', 'That already exists.', { cause: error });
       case '42501':
+      case '28000':
       case 'PGRST301':
         return new AppError('unauthorized', 'Your session has expired. Please sign in again.', { cause: error });
       case '23514':

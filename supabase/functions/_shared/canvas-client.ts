@@ -6,6 +6,8 @@
 // X-Request-Cost and, when throttling applies, X-Rate-Limit-Remaining; throttled calls get 429
 // (older instances: 403 "Rate Limit Exceeded"). An invalid or expired token is a 401 with a
 // WWW-Authenticate header; a 401 without it means "not allowed to do that" on one resource.
+import { utcToLocal } from './calendar-model.ts';
+import { type DiscrepancyRecord, matchCandidates } from './match.ts';
 import { assertPublicHttpsUrl, type SafeFetchOptions, type SafeResponse } from './safe-fetch.ts';
 
 export type CanvasId = string;
@@ -390,4 +392,160 @@ export function htmlToText(html: string | null | undefined, maxLength = 4000): s
 export function hasSyllabusContent(html: string | null | undefined): boolean {
   if (!html) return false;
   return htmlToText(html, 200).length > 0 || /<(a\s[^>]*href|iframe|embed|object|img)\b/i.test(html);
+}
+
+// ---------------------------------------------------------------------------
+// Assignment → item fields
+// ---------------------------------------------------------------------------
+
+/** What one Canvas assignment contributes to a Termwise item, in the student's local time. */
+export interface CanvasItemFields {
+  external_id: CanvasId;
+  group_id: CanvasId;
+  title: string;
+  kind: MappedKind;
+  description: string | null;
+  /** Local `YYYY-MM-DD` / `HH:MM` in the student's zone; null when Canvas has no due date. */
+  due_date: string | null;
+  due_time: string | null;
+  assigned_date: string | null;
+  lock_date: string | null;
+  lock_time: string | null;
+  lms_due_at: string | null;
+  lms_lock_at: string | null;
+  lms_unlock_at: string | null;
+  points_possible: number | null;
+  /** The visible score; null when not requested, ungraded, excused, or hidden. */
+  score: number | null;
+  /** Turned in, graded, or excused (only known when submissions were requested). */
+  complete: boolean;
+  is_major: boolean;
+  /** Share of the course grade implied by the assignment group (null when unknown). */
+  weight: number | null;
+}
+
+function validInstant(value: string | null | undefined): string | null {
+  return value && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null;
+}
+
+export function mapCanvasAssignment(
+  assignment: CanvasAssignment,
+  options: { timeZone: string; group: GroupWeight | undefined; includeScores: boolean },
+): CanvasItemFields {
+  const kind = inferCanvasKind(assignment);
+  const dueAt = validInstant(assignment.due_at);
+  const lockAt = validInstant(assignment.lock_at);
+  const unlockAt = validInstant(assignment.unlock_at);
+  const due = dueAt ? utcToLocal(dueAt, options.timeZone) : null;
+  const lock = lockAt ? utcToLocal(lockAt, options.timeZone) : null;
+  const weight = countsTowardGrade(assignment) ? assignmentWeight(options.group) : null;
+  const points =
+    typeof assignment.points_possible === 'number' && Number.isFinite(assignment.points_possible) && assignment.points_possible >= 0
+      ? assignment.points_possible
+      : null;
+  const description = htmlToText(assignment.description, 2000);
+  return {
+    external_id: String(assignment.id),
+    group_id: String(assignment.assignment_group_id),
+    title: (assignment.name ?? '').trim().slice(0, 300) || 'Canvas assignment',
+    kind,
+    description: description || null,
+    due_date: due?.date ?? null,
+    due_time: due?.time ?? null,
+    assigned_date: unlockAt ? utcToLocal(unlockAt, options.timeZone).date : null,
+    lock_date: lock?.date ?? null,
+    lock_time: lock?.time ?? null,
+    lms_due_at: dueAt,
+    lms_lock_at: lockAt,
+    lms_unlock_at: unlockAt,
+    points_possible: points,
+    score: options.includeScores ? scoreFromSubmission(assignment.submission) : null,
+    complete: options.includeScores && submissionIsComplete(assignment.submission),
+    is_major: isMajorAssignment(kind, weight),
+    weight,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Assignment groups ↔ syllabus grading components
+// ---------------------------------------------------------------------------
+
+export interface SyllabusComponentRef {
+  id: string;
+  name: string;
+  weight: number;
+  /** Canvas group linked on an earlier sync. */
+  canvas_group_id: string | null;
+}
+
+const GROUP_MATCH = { threshold: 0.5, minTitle: 0.55 };
+
+/**
+ * Pairs Canvas assignment groups with the syllabus's grading components: links from an earlier
+ * sync first, then by name similarity one-to-one, then each leftover component joins the group
+ * it resembles most (one "Exams" group in Canvas often covers "Midterm" and "Final" in the
+ * syllabus). Returns group id → its components.
+ */
+export function matchGroupsToComponents<C extends SyllabusComponentRef>(
+  groups: Array<Pick<CanvasAssignmentGroup, 'id' | 'name'>>,
+  components: C[],
+): Map<CanvasId, C[]> {
+  const out = new Map<CanvasId, C[]>();
+  const used = new Set<string>();
+  const attach = (groupId: string, component: C) => {
+    out.set(groupId, [...(out.get(groupId) ?? []), component]);
+    used.add(component.id);
+  };
+  const groupIds = new Set(groups.map((g) => String(g.id)));
+  for (const component of components) {
+    if (component.canvas_group_id && groupIds.has(component.canvas_group_id)) attach(component.canvas_group_id, component);
+  }
+
+  const groupCandidates = groups.map((g) => ({ id: String(g.id), title: g.name, kind: null, date: null }));
+  const componentCandidates = () =>
+    components.filter((c) => !used.has(c.id)).map((c) => ({ id: c.id, title: c.name, kind: null, date: null, component: c }));
+  const firstPass = matchCandidates(groupCandidates.filter((g) => !out.has(g.id)), componentCandidates(), GROUP_MATCH);
+  for (const pair of firstPass.pairs) attach(pair.a.id, pair.b.component);
+
+  for (const leftover of componentCandidates()) {
+    const best = matchCandidates([leftover], groupCandidates, GROUP_MATCH).pairs[0];
+    if (best) attach(best.b.id, leftover.component);
+  }
+  return out;
+}
+
+const formatWeight = (n: number) => `${Number(n.toFixed(1))}%`;
+
+/**
+ * weight_mismatch records for groups matched to syllabus components (a group's weight is compared
+ * with the sum of its components). Weights derived from points are approximate, so they get a
+ * wider tolerance and the text says how they were computed.
+ */
+export function buildWeightDiscrepancies(
+  scope: string,
+  pairs: Array<{ components: SyllabusComponentRef[]; group: Pick<CanvasAssignmentGroup, 'id' | 'name'>; weight: GroupWeight }>,
+): DiscrepancyRecord[] {
+  const out: DiscrepancyRecord[] = [];
+  for (const { components, group, weight } of pairs) {
+    if (components.length === 0 || (weight.derived && weight.count === 0)) continue;
+    const syllabusWeight = components.reduce((sum, c) => sum + Number(c.weight), 0);
+    const tolerance = weight.derived ? 2 : 0.5;
+    if (Math.abs(weight.weight - syllabusWeight) <= tolerance) continue;
+    const canvasValue = formatWeight(weight.weight);
+    const syllabusValue = formatWeight(syllabusWeight);
+    const names = components.map((c) => c.name).join(' + ');
+    out.push({
+      kind: 'weight_mismatch',
+      title: names,
+      detail: weight.derived
+        ? `Canvas doesn't weight assignment groups, so by points “${group.name}” counts for about ${canvasValue} of the grade; the syllabus gives ${names} ${syllabusValue}.`
+        : `Canvas weights “${group.name}” at ${canvasValue} of the grade; the syllabus gives ${names} ${syllabusValue}.`,
+      syllabus_value: syllabusValue,
+      lms_value: weight.derived ? `≈${canvasValue}` : canvasValue,
+      item_id: null,
+      lms_external_id: String(group.id),
+      dedupe_key: `${scope}:weight_mismatch:group:${group.id}`,
+    });
+  }
+  return out;
 }

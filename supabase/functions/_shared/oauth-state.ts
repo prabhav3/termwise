@@ -29,6 +29,8 @@ const RETURN_URL_PREFIXES = ['termwise://', 'exp://'];
 /** Only deep links back into the app (or Expo Go during development) are accepted. */
 export function isAllowedReturnUrl(url: unknown): url is string {
   if (typeof url !== 'string' || url.length > 512) return false;
+  // Whitespace and control characters could smuggle extra headers or URL parts.
+  // deno-lint-ignore no-control-regex
   if (/[\s\u0000-\u001f\u007f]/.test(url)) return false;
   return RETURN_URL_PREFIXES.some((prefix) => url.startsWith(prefix) && url.length > prefix.length);
 }
@@ -111,4 +113,9 @@ export async function verifyOAuthState(token: string, secret: string, nowMs: num
   if (!isOAuthState(payload)) throw new OAuthStateError('malformed');
   if (payload.exp * 1000 < nowMs) throw new OAuthStateError('expired');
   return payload;
+}
+
+/** The redirect URI registered with Google and Microsoft: the callback function's public URL. */
+export function oauthRedirectUri(supabaseUrl: string): string {
+  return `${supabaseUrl.replace(/\/+$/, '')}/functions/v1/calendar-oauth-callback`;
 }

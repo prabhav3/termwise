@@ -27,7 +27,7 @@ export interface ScreenProps {
   /** Pinned below the content, e.g. the primary action of a form. */
   footer?: ReactNode;
   /** Safe-area edges to pad when the platform does not inset automatically. Modals usually want ['bottom']. */
-  edges?: ReadonlyArray<'top' | 'bottom'>;
+  edges?: readonly ('top' | 'bottom')[];
   refreshControl?: ReactElement<RefreshControlProps>;
   contentContainerStyle?: StyleProp<ViewStyle>;
 }

@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { appendQuery, isAllowedReturnUrl, OAUTH_STATE_TTL_SECONDS, OAuthStateError, signOAuthState, verifyOAuthState } from './oauth-state.ts';
+import {
+  appendQuery,
+  isAllowedReturnUrl,
+  OAUTH_STATE_TTL_SECONDS,
+  OAuthStateError,
+  oauthRedirectUri,
+  signOAuthState,
+  verifyOAuthState,
+} from './oauth-state.ts';
 
 const SECRET = 'test-oauth-state-secret-0123456789';
 const input = { uid: '7f1c0c1e-1111-4222-8333-944445555666', provider: 'google' as const, return_url: 'termwise://integrations/calendar' };
@@ -47,5 +55,12 @@ describe('return URLs', () => {
     expect(appendQuery('termwise://x?tab=1#top', { status: 'error', message: 'Try again' })).toBe(
       'termwise://x?tab=1&status=error&message=Try+again#top',
     );
+  });
+});
+
+describe('redirect URI', () => {
+  it('points at the callback function', () => {
+    expect(oauthRedirectUri('https://abc.supabase.co/')).toBe('https://abc.supabase.co/functions/v1/calendar-oauth-callback');
+    expect(oauthRedirectUri('https://abc.supabase.co')).toBe('https://abc.supabase.co/functions/v1/calendar-oauth-callback');
   });
 });

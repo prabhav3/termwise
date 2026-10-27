@@ -274,9 +274,10 @@ export function normalizeTzid(raw: string | undefined | null): string | null {
   let tzid = raw.trim().replace(/^"|"$/g, '');
   if (tzid.startsWith('/')) tzid = tzid.slice(1); // "/America/New_York" (vendor-prefixed)
   tzid = tzid.replace(/^(?:mozilla\.org|freeassociation\.sourceforge\.net)\/[^/]+\//i, '');
-  if (isValidTimeZone(tzid)) return tzid;
-  const mapped = WINDOWS_ZONES[tzid.toLowerCase()];
-  return mapped ?? null;
+  // Windows names never collide with IANA ids, so the table can go first.
+  const windows = WINDOWS_ZONES[tzid.toLowerCase()];
+  if (windows) return windows;
+  return isValidTimeZone(tzid) ? tzid : null;
 }
 
 export function unescapeText(value: string): string {
@@ -460,4 +461,56 @@ export function toInstantMs(value: IcsDateTime, timeZone: string): number {
     case 'zoned':
       return localToUtcMs(value.date, value.time, value.tzid);
   }
+}
+
+// ---------------------------------------------------------------------------
+// LMS feed conventions
+// ---------------------------------------------------------------------------
+
+/** Label used for feed events that name no course. */
+export const UNLABELED_FEED_COURSE = 'Other';
+
+const GENERIC_CATEGORIES = new Set([
+  'assignment', 'assignments', 'quiz', 'quizzes', 'exam', 'test', 'event', 'events', 'course', 'due', 'deadline',
+  'deadlines', 'user', 'site', 'group', 'category', 'course event', 'user event', 'site event', 'calendar',
+]);
+
+/** A token that looks like a course code: "PSY101", "PSY 101-02", "CS-1301", "BIO_210_F26". */
+const COURSE_CODE = /^([A-Za-z]{2,6})[\s_-]?\d{2,4}[A-Za-z]?(?:[\s_.-]+[A-Za-z0-9]{1,6}){0,3}$/;
+/** Words that look like a subject code next to a number but name an assessment ("Quiz 12"). */
+const NOT_SUBJECTS = new Set(['quiz', 'lab', 'exam', 'test', 'hw', 'unit', 'week', 'wk', 'ch', 'chap', 'part', 'essay', 'paper', 'task', 'module', 'mod', 'day', 'lesson', 'lecture', 'topic', 'project', 'step', 'item', 'problem', 'set', 'case', 'page', 'room']);
+
+function isCourseCode(text: string): boolean {
+  const match = COURSE_CODE.exec(text.trim());
+  return match !== null && !NOT_SUBJECTS.has(match[1].toLowerCase());
+}
+
+/**
+ * The course an LMS feed event belongs to. Moodle exports the course short name in CATEGORIES;
+ * Blackboard and Brightspace prefix the summary ("[PSY101] Quiz 2", "PSY 101: Quiz 2",
+ * "PSY101 - Quiz 2"). Returns the label and the summary without the prefix.
+ */
+export function feedCourseLabel(event: Pick<ParsedIcsEvent, 'summary' | 'categories'>): { label: string | null; title: string } {
+  const summary = event.summary.trim();
+  const bracket = /^\[([^\]]{2,80})\]\s*[-:–]?\s*(.+)$/.exec(summary);
+  const category = event.categories.find((c) => !GENERIC_CATEGORIES.has(c.trim().toLowerCase()))?.trim() ?? null;
+  if (bracket) return { label: category ?? bracket[1].trim(), title: bracket[2].trim() };
+  const prefixed = /^(.{2,40}?)\s*(?::|\s[-–]\s)\s*(.+)$/.exec(summary);
+  if (prefixed && isCourseCode(prefixed[1])) {
+    return { label: category ?? prefixed[1].trim(), title: prefixed[2].trim() };
+  }
+  return { label: category, title: summary };
+}
+
+/**
+ * Strips LMS boilerplate from a feed title ("Essay 1 is due" → "Essay 1") and flags events that
+ * mark when something opens rather than when it is due.
+ */
+export function cleanFeedTitle(title: string): { title: string; isOpening: boolean } {
+  const isOpening = /\b(opens|is available|available from|becomes available|starts)\s*$/i.test(title) || /^(opens|available)\s*:/i.test(title);
+  const cleaned = title
+    .replace(/^(due|deadline)\s*:\s*/i, '')
+    .replace(/\s*[-–(]?\s*\b(is due|due|closes|deadline|opens|is available|available from|becomes available|starts)\s*\)?\s*$/i, '')
+    .trim();
+  return { title: cleaned || title.trim(), isOpening };
 }

@@ -15,7 +15,7 @@ export interface EmptyStateProps {
   style?: StyleProp<ViewStyle>;
 }
 
-const STACK: ReadonlyArray<{ tone: AccentColor; rotate: string; x: number; y: number }> = [
+const STACK: readonly { tone: AccentColor; rotate: string; x: number; y: number }[] = [
   { tone: 'blue', rotate: '-8deg', x: -18, y: 10 },
   { tone: 'pink', rotate: '6deg', x: 18, y: 4 },
 ];

@@ -1,5 +1,7 @@
 import { queryOptions, useMutation, useQueryClient } from '@tanstack/react-query';
 
+import { deleteAccount } from '@/lib/functions';
+import { cancelTriageNotifications } from '@/lib/notifications';
 import { supabase } from '@/lib/supabase';
 import type { Profile } from '@/types/db';
 
@@ -9,7 +11,7 @@ import { queryKeys } from './keys';
 import { notifyPlanInputsChanged } from './plan-signal';
 
 /** Profile columns the planner reads; changing any of them triggers a replan. */
-const PLANNER_FIELDS: ReadonlyArray<keyof Profile> = [
+const PLANNER_FIELDS: readonly (keyof Profile)[] = [
   'timezone',
   'study_days',
   'daily_capacity_minutes',
@@ -50,5 +52,21 @@ export function useUpdateProfile() {
       client.setQueryData(queryKeys.profile(profile.id), profile);
       if (PLANNER_FIELDS.some((field) => field in changes)) notifyPlanInputsChanged();
     },
+  });
+}
+
+/**
+ * Permanently deletes the account (files, rows, auth user), then ends the local session; the
+ * auth guard takes the student back to sign-in.
+ */
+export function useDeleteAccount() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      await deleteAccount();
+      await cancelTriageNotifications();
+      await supabase.auth.signOut({ scope: 'local' });
+    },
+    onSuccess: () => client.clear(),
   });
 }

@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildItemDiscrepancies,
+  courseLabelScore,
   dateProximity,
   type ExistingDiscrepancy,
   kindCompatibility,
   type LmsSide,
   matchCandidates,
+  matchFeedCourses,
   normalizeTitle,
   planDiscrepancyWrites,
   type SyllabusSide,
@@ -209,5 +211,24 @@ describe('planDiscrepancyWrites', () => {
     expect(planDiscrepancyWrites([existing({ status: 'dismissed', lms_value: '2026-10-16' })], [record]).upsert).toEqual([record]);
     expect(planDiscrepancyWrites([existing({ status: 'resolved' })], [record]).upsert).toEqual([record]);
     expect(planDiscrepancyWrites([existing({ status: 'dismissed' })], []).resolveIds).toEqual([]);
+  });
+});
+
+describe('matchFeedCourses', () => {
+  const courses = [
+    { id: 'psy', code: 'PSY 101', title: 'Introduction to Psychology' },
+    { id: 'bio', code: 'BIO 210', title: 'Cell Biology' },
+    { id: 'his', code: null, title: 'Modern European History' },
+  ];
+
+  it('maps labels by code, title, and containment, one-to-one', () => {
+    expect(courseLabelScore('PSY101', courses[0])).toBe(1);
+    expect(courseLabelScore('PSY101-02-F26', courses[0])).toBe(0.9);
+    const mapped = matchFeedCourses(['PSY101-02-F26', 'Cell Biology', 'Modern European History (Fall)', 'CHEM 120'], courses);
+    expect(Object.fromEntries(mapped)).toEqual({ 'PSY101-02-F26': 'psy', 'Cell Biology': 'bio', 'Modern European History (Fall)': 'his' });
+  });
+
+  it('leaves weak labels unmapped', () => {
+    expect(matchFeedCourses(['Psychology Club'], courses).size).toBe(0);
   });
 });

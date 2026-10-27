@@ -35,9 +35,10 @@ import { byString, isOpen } from './util';
 
 const OVERFLOW_FACTOR = 1.25;
 const MAX_PLAN_DAYS = 180;
+/** A day's first piece of an item is at least this long (no 5-minute crumbs). */
 const MIN_PIECE_MINUTES = 15;
-const MAX_PIECE_MINUTES = 60;
-const RAMP_STEP_MINUTES = 5;
+/** After the first piece, days grow in small steps so loads level out evenly. */
+const LEVEL_STEP_MINUTES = 5;
 const MIN_READING_PAGES = 5;
 const POP_QUIZ_MINUTES = 10;
 const POP_QUIZ_HORIZON_DAYS = 14;
@@ -48,6 +49,9 @@ const GROUP_POP_QUIZ = 1;
 const GROUP_WORK = 2;
 const GROUP_EXAM_REVIEW = 3;
 
+/** Chronological order of the buffer generator's check-ins (also their order on a shared day). */
+const MILESTONE_SEQ = { start: 0, outline: 1, draft: 2, final: 3 } as const;
+
 const KEY_PATTERN = /^(.+):(reading|work|milestone|study|review):(\d+)$/;
 
 interface ItemHistory {
@@ -55,7 +59,7 @@ interface ItemHistory {
   /** Manual planned blocks dated today or later: the student already scheduled this work. */
   manualPlannedMinutes: number;
   /** Page ranges already read or scheduled by hand. */
-  coveredRanges: Array<{ start: number; end: number }>;
+  coveredRanges: { start: number; end: number }[];
   /** Done / manual reading time with no page numbers (converted to pages at reading speed). */
   pagelessMinutes: number;
   /** Dates ≥ today with a missed/skipped block: the student couldn't do this item's work then. */
@@ -75,6 +79,8 @@ interface Draft {
   page_start: number | null;
   page_end: number | null;
   group: number;
+  /** Tie-break within an item's group on one day (milestone sequence). */
+  order: number;
 }
 
 interface ItemOutcome {
@@ -91,7 +97,6 @@ interface PlanContext {
   overCap: number;
   isStudyDay: (date: ISODate) => boolean;
   book: LoadBook;
-  courses: Map<string, EngineCourse>;
   drafts: Draft[];
 }
 
@@ -100,8 +105,6 @@ interface InternalPlan extends PlanResult {
 }
 
 // ---- helpers -------------------------------------------------------------------------------
-
-
 
 function emptyHistory(): ItemHistory {
   return {
@@ -175,28 +178,91 @@ function windowDays(ctx: PlanContext, start: ISODate, due: ISODate, blocked: Set
   return days.length > 0 ? days : collapse(ctx, due, blocked);
 }
 
-/** The due date is a last resort for everything except papers and projects. */
-function lastResort(item: AnnotatedItem, due: ISODate, blocked: Set<ISODate>): ISODate | null {
-  if (item.kind === 'paper' || item.kind === 'project') return null;
-  return blocked.has(due) ? null : due;
+/**
+ * Days outside the window used only when nothing else fits: the due date (never for papers and
+ * projects), and for presentations the day before it first.
+ */
+function lastResort(ctx: PlanContext, item: AnnotatedItem, due: ISODate, window: ISODate[], blocked: Set<ISODate>): ISODate[] {
+  if (item.kind === 'paper' || item.kind === 'project') return [];
+  const days = item.kind === 'presentation' ? [addDays(due, -1), due] : [due];
+  return days.filter((date) => date >= ctx.today && !blocked.has(date) && !window.includes(date));
 }
 
-function evenChunk(minutes: number, dayCount: number): number {
-  return clamp(roundTo5(minutes / Math.max(1, dayCount)), MIN_PIECE_MINUTES, MAX_PIECE_MINUTES);
+/** Minute work: a day's first piece ≥ 15 min, then 5-minute leveling steps. */
+function minutePool(days: ISODate[], weights?: number[]): Pool {
+  return { unitMinutes: 1, chunkUnits: LEVEL_STEP_MINUTES, minNewDayUnits: MIN_PIECE_MINUTES, days, weights };
 }
 
-/** Capacity pass, then the 125% overflow pass, then the due date when allowed. */
-function runPool(ctx: PlanContext, pool: Pool, units: number, resort: ISODate | null): { alloc: Allocation; leftover: number } {
-  const alloc: Allocation = new Map();
+/** Capacity pass, then the 125% overflow pass, then the last-resort days in order. */
+function runPool(
+  ctx: PlanContext,
+  pool: Pool,
+  units: number,
+  resort: ISODate[],
+  alloc: Allocation = new Map(),
+): { alloc: Allocation; leftover: number } {
   let leftover = fillPool(pool, alloc, ctx.book, ctx.cap, units);
   if (leftover > 0) leftover = fillPool(pool, alloc, ctx.book, ctx.overCap, leftover);
-  if (leftover > 0 && resort !== null) {
-    leftover = fillPool({ ...pool, days: [resort], weights: undefined }, alloc, ctx.book, ctx.overCap, leftover);
+  for (const day of resort) {
+    if (leftover <= 0) break;
+    leftover = fillPool({ ...pool, days: [day], weights: undefined }, alloc, ctx.book, ctx.overCap, leftover);
   }
   return { alloc, leftover };
 }
 
-function sortedEntries(alloc: Allocation): Array<[ISODate, number]> {
+/** Ramp weights 1, 1.5, 2, … so sessions grow toward the test (4 days ≈ 14/21/29/36%). */
+function rampWeights(count: number): number[] {
+  return Array.from({ length: count }, (_, i) => 1 + 0.5 * i);
+}
+
+/** How many trailing window days the ramp uses: as many as keep the first session ≥ 15 min. */
+function rampLength(minutes: number, available: number): number {
+  for (let count = available; count > 1; count--) {
+    const weights = rampWeights(count);
+    const total = weights.reduce((a, b) => a + b, 0);
+    if ((minutes * weights[0]) / total >= MIN_PIECE_MINUTES) return count;
+  }
+  return Math.min(1, available);
+}
+
+/** Growing per-day session lengths (5-minute steps) that sum to `minutes`. */
+function rampTargets(minutes: number, count: number): number[] {
+  const weights = rampWeights(count);
+  const total = weights.reduce((a, b) => a + b, 0);
+  let cumulative = 0;
+  let previous = 0;
+  return weights.map((weight, i) => {
+    cumulative += weight;
+    const boundary = i === count - 1 ? minutes : Math.min(minutes, roundTo5((minutes * cumulative) / total));
+    const part = boundary - previous;
+    previous = boundary;
+    return part;
+  });
+}
+
+/**
+ * Test prep: the item's own sessions grow toward the test on the last study days. Whatever a
+ * full day can't take is water-filled over the whole window (later days still favoured), then
+ * the usual overflow and last-resort passes.
+ */
+function runRamp(ctx: PlanContext, days: ISODate[], minutes: number, resort: ISODate[]): { alloc: Allocation; leftover: number } {
+  const alloc: Allocation = new Map();
+  const count = rampLength(minutes, days.length);
+  const rampDays = days.slice(days.length - count);
+  const targets = rampTargets(minutes, count);
+  let leftover = minutes;
+  rampDays.forEach((day, i) => {
+    const piece = Math.min(targets[i], ctx.cap - ctx.book.get(day));
+    if (piece <= 0 || piece < Math.min(MIN_PIECE_MINUTES, targets[i])) return;
+    ctx.book.add(day, piece);
+    alloc.set(day, piece);
+    leftover -= piece;
+  });
+  if (leftover <= 0) return { alloc, leftover: 0 };
+  return runPool(ctx, minutePool(days, rampWeights(days.length)), leftover, resort, alloc);
+}
+
+function sortedEntries(alloc: Allocation): [ISODate, number][] {
   return [...alloc.entries()].filter(([, units]) => units > 0).sort(([a], [b]) => byString(a, b));
 }
 
@@ -208,7 +274,7 @@ function pushMinuteDrafts(
   label: (minutes: number) => string,
 ): void {
   for (const [date, minutes] of sortedEntries(alloc)) {
-    ctx.drafts.push({ item, date, kind, minutes, label: label(minutes), page_start: null, page_end: null, group: GROUP_WORK });
+    ctx.drafts.push({ item, date, kind, minutes, label: label(minutes), page_start: null, page_end: null, group: GROUP_WORK, order: 0 });
   }
 }
 
@@ -247,8 +313,7 @@ function planTask(ctx: PlanContext, item: AnnotatedItem, due: ISODate, history: 
   const days = windowDays(ctx, start, due, blocked);
   const minutes = remainingMinutes(item, history);
   if (minutes <= 0) return { item, unplaced: 0, windowDays: days, blocked };
-  const pool: Pool = { unitMinutes: 1, chunkUnits: evenChunk(minutes, days.length), minNewDayUnits: MIN_PIECE_MINUTES, days };
-  const { alloc, leftover } = runPool(ctx, pool, minutes, lastResort(item, due, blocked));
+  const { alloc, leftover } = runPool(ctx, minutePool(days), minutes, lastResort(ctx, item, due, days, blocked));
   pushMinuteDrafts(ctx, item, alloc, 'work', (m) => workLabel(item.title, m));
   return { item, unplaced: leftover, windowDays: days, blocked };
 }
@@ -295,6 +360,7 @@ function pushReadingDrafts(
         page_start: run[0].start,
         page_end: run[run.length - 1].end,
         group: GROUP_WORK,
+        order: 0,
       });
     });
   }
@@ -303,14 +369,13 @@ function pushReadingDrafts(
 function planReading(ctx: PlanContext, item: AnnotatedItem, due: ISODate, history: ItemHistory): ItemOutcome {
   const blocked = history.blockedDates;
   const days = windowDays(ctx, item.assigned_date ?? addDays(due, -7), due, blocked);
-  const resort = lastResort(item, due, blocked);
+  const resort = lastResort(ctx, item, due, days, blocked);
   const reading = resolveReading(item, ctx.input.textbooks, ctx.input.settings);
 
   if (reading === null) {
     const minutes = remainingMinutes(item, history);
     if (minutes <= 0) return { item, unplaced: 0, windowDays: days, blocked };
-    const pool: Pool = { unitMinutes: 1, chunkUnits: evenChunk(minutes, days.length), minNewDayUnits: MIN_PIECE_MINUTES, days };
-    const { alloc, leftover } = runPool(ctx, pool, minutes, resort);
+    const { alloc, leftover } = runPool(ctx, minutePool(days), minutes, resort);
     pushMinuteDrafts(ctx, item, alloc, 'reading', (m) => timedReadingLabel(item.title, m));
     return { item, unplaced: leftover, windowDays: days, blocked };
   }
@@ -321,20 +386,16 @@ function planReading(ctx: PlanContext, item: AnnotatedItem, due: ISODate, histor
   // Pages are the unit of truth; minutes never drop below reading speed for the pages left.
   const minutes = Math.max(remainingMinutes(item, history), readingMinutes(pages, ctx.input.settings));
   const unitMinutes = minutes / pages;
+  // Whole pages: a day's first piece is ≥ 5 pages and ≥ 15 minutes, then one page at a time.
   const pool: Pool = {
     unitMinutes,
-    chunkUnits: Math.max(MIN_READING_PAGES, Math.round(evenChunk(minutes, days.length) / unitMinutes)),
-    minNewDayUnits: MIN_READING_PAGES,
+    chunkUnits: 1,
+    minNewDayUnits: Math.max(MIN_READING_PAGES, Math.ceil(MIN_PIECE_MINUTES / unitMinutes - 1e-9)),
     days,
   };
   const { alloc, leftover } = runPool(ctx, pool, pages, resort);
   pushReadingDrafts(ctx, item, alloc, unread, unitMinutes, reading);
   return { item, unplaced: unitsToMinutes(leftover, unitMinutes), windowDays: days, blocked };
-}
-
-/** Ramp weights 1, 1.5, 2, … so sessions grow toward the test (4 days ≈ 14/21/29/36%). */
-function rampWeights(count: number): number[] {
-  return Array.from({ length: count }, (_, i) => 1 + 0.5 * i);
 }
 
 function planQuiz(ctx: PlanContext, item: AnnotatedItem, due: ISODate, history: ItemHistory): ItemOutcome {
@@ -343,8 +404,7 @@ function planQuiz(ctx: PlanContext, item: AnnotatedItem, due: ISODate, history: 
   const days = candidates.length > 0 ? candidates : collapse(ctx, due, blocked);
   const minutes = remainingMinutes(item, history);
   if (minutes <= 0) return { item, unplaced: 0, windowDays: days, blocked };
-  const pool: Pool = { unitMinutes: 1, chunkUnits: RAMP_STEP_MINUTES, minNewDayUnits: MIN_PIECE_MINUTES, days, weights: rampWeights(days.length) };
-  const { alloc, leftover } = runPool(ctx, pool, minutes, lastResort(item, due, blocked));
+  const { alloc, leftover } = runRamp(ctx, days, minutes, lastResort(ctx, item, due, days, blocked));
   pushMinuteDrafts(ctx, item, alloc, 'study', (m) => studyLabel(item.title, m));
   return { item, unplaced: leftover, windowDays: days, blocked };
 }
@@ -353,7 +413,7 @@ function planExam(ctx: PlanContext, item: AnnotatedItem, due: ISODate, history: 
   const blocked = history.blockedDates;
   const rampStart = addDays(due, item.impact.isHighImpact ? -7 : -4);
   const days = windowDays(ctx, maxDate(rampStart, item.assigned_date) ?? rampStart, due, blocked);
-  const resort = lastResort(item, due, blocked);
+  const resort = lastResort(ctx, item, due, days, blocked);
   const minutes = remainingMinutes(item, history);
   if (minutes <= 0) return { item, unplaced: 0, windowDays: days, blocked };
 
@@ -361,9 +421,8 @@ function planExam(ctx: PlanContext, item: AnnotatedItem, due: ISODate, history: 
   const reviewDone = history.reviewDates.some((date) => date >= addDays(due, -1));
   if (!reviewDone) {
     const wanted = Math.min(minutes, clamp(roundTo5(minutes * 0.15), MIN_PIECE_MINUTES, 45));
-    const order = [...days].reverse();
-    if (resort !== null) order.push(resort);
-    const date = placeFixed(wanted, order, ctx.book, [ctx.cap, ctx.overCap], true);
+    // Keep it on due − 1 even if that day runs into the overflow allowance.
+    const date = placeFixed(wanted, [...days].reverse().concat(resort), ctx.book, [ctx.cap, ctx.overCap], true);
     if (date !== null) {
       reviewMinutes = wanted;
       ctx.drafts.push({
@@ -375,24 +434,30 @@ function planExam(ctx: PlanContext, item: AnnotatedItem, due: ISODate, history: 
         page_start: null,
         page_end: null,
         group: GROUP_EXAM_REVIEW,
+        order: 0,
       });
     }
   }
 
   const studyMinutes = minutes - reviewMinutes;
   if (studyMinutes <= 0) return { item, unplaced: 0, windowDays: days, blocked };
-  const pool: Pool = { unitMinutes: 1, chunkUnits: RAMP_STEP_MINUTES, minNewDayUnits: MIN_PIECE_MINUTES, days, weights: rampWeights(days.length) };
-  const { alloc, leftover } = runPool(ctx, pool, studyMinutes, resort);
+  const { alloc, leftover } = runRamp(ctx, days, studyMinutes, resort);
   pushMinuteDrafts(ctx, item, alloc, 'study', (m) => studyLabel(item.title, m));
   return { item, unplaced: leftover, windowDays: days, blocked };
 }
 
-function nearest(days: ISODate[], target: ISODate): ISODate {
-  return byDistance(days, target)[0];
+interface MilestoneSpec {
+  label: string;
+  date: ISODate;
+  seq: number;
 }
 
-/** Milestone dates on the window's study days, in keep-priority order (final, start, draft, outline). */
-function milestonePlan(item: AnnotatedItem, days: ISODate[], due: ISODate, history: ItemHistory): Array<{ label: string; date: ISODate }> {
+/**
+ * Which check-ins to schedule and on which window day, in chronological order. When the window
+ * is too short for all four on separate days, they are kept in priority order: final review,
+ * start, full draft, outline.
+ */
+function milestonePlan(item: AnnotatedItem, days: ISODate[], due: ISODate, history: ItemHistory): MilestoneSpec[] {
   if (days.length === 0) return [];
   const first = days[0];
   const last = days[days.length - 1];
@@ -405,21 +470,21 @@ function milestonePlan(item: AnnotatedItem, days: ISODate[], due: ISODate, histo
   const outlineDate = pinnedDraft ? at(first, twoWeeks, 0.4) : at(first, last, 0.4);
 
   const candidates = [
-    { label: finalMilestoneLabel(item.kind), date: last, skip: false },
-    { label: MILESTONE_LABELS.start, date: first, skip: history.hasDoneWork },
-    { label: MILESTONE_LABELS.draft, date: draftDate, skip: false },
-    { label: MILESTONE_LABELS.outline, date: outlineDate, skip: false },
+    { label: finalMilestoneLabel(item.kind), date: last, seq: MILESTONE_SEQ.final, skip: false },
+    { label: MILESTONE_LABELS.start, date: first, seq: MILESTONE_SEQ.start, skip: history.hasDoneWork },
+    { label: MILESTONE_LABELS.draft, date: draftDate, seq: MILESTONE_SEQ.draft, skip: false },
+    { label: MILESTONE_LABELS.outline, date: outlineDate, seq: MILESTONE_SEQ.outline, skip: false },
   ];
   const taken = new Set<ISODate>();
-  const plan: Array<{ label: string; date: ISODate }> = [];
+  const plan: MilestoneSpec[] = [];
   for (const candidate of candidates) {
     if (candidate.skip || history.completedMilestones.has(candidate.label)) continue;
-    const date = nearest(days, candidate.date);
+    const date = byDistance(days, candidate.date)[0];
     if (taken.has(date)) continue;
     taken.add(date);
-    plan.push({ label: candidate.label, date });
+    plan.push({ label: candidate.label, date, seq: candidate.seq });
   }
-  return plan;
+  return plan.sort((a, b) => a.seq - b.seq);
 }
 
 /** Papers, projects, presentations: early start, milestone check-ins, finish by due − 2. */
@@ -431,26 +496,45 @@ function planBuffered(ctx: PlanContext, item: AnnotatedItem, due: ISODate, histo
   let days = studyDays(ctx, start, addDays(due, -2), blocked);
   if (days.length === 0) days = studyDays(ctx, start, addDays(due, -1), blocked);
   if (days.length === 0) days = collapse(ctx, due, blocked);
-  const resort = lastResort(item, due, blocked);
+  const resort = lastResort(ctx, item, due, days, blocked);
   let budget = remainingMinutes(item, history);
   if (budget <= 0) return { item, unplaced: 0, windowDays: days, blocked };
 
-  const milestoneDays = days.length > 0 ? days : resort !== null ? [resort] : [];
+  const milestoneDays = days.length > 0 ? days : resort;
+  const reachable = [...milestoneDays, ...resort.filter((d) => !milestoneDays.includes(d))];
   const milestoneMinutes = clamp(roundTo5(item.effortMinutes * 0.04), MIN_PIECE_MINUTES, 30);
-  for (const milestone of milestonePlan(item, milestoneDays, due, history)) {
-    if (budget <= 0) break;
+  const plan = milestonePlan(item, milestoneDays, due, history);
+  // Placed in order; a check-in pushed off its day by a full schedule stays between its
+  // neighbours (preferring a day of its own) so the sequence never runs backwards.
+  let floor: ISODate | null = null;
+  for (let i = 0; i < plan.length && budget > 0; i++) {
+    const milestone = plan[i];
+    const ceiling = plan[i + 1]?.date ?? null;
+    const lower = floor;
+    const candidates = byDistance(
+      reachable.filter((d) => (lower === null || d >= lower) && (ceiling === null || d <= ceiling)),
+      milestone.date,
+    ).sort((a, b) => Number(a === lower || a === ceiling) - Number(b === lower || b === ceiling));
     const minutes = Math.min(milestoneMinutes, budget);
-    const order = byDistance(milestoneDays, milestone.date);
-    if (resort !== null && !order.includes(resort)) order.push(resort);
-    const date = placeFixed(minutes, order, ctx.book, [ctx.cap, ctx.overCap], false);
+    const date = placeFixed(minutes, candidates, ctx.book, [ctx.cap, ctx.overCap], false);
     if (date === null) continue; // no room anywhere: its minutes stay in the pool below
+    floor = date;
     budget -= minutes;
-    ctx.drafts.push({ item, date, kind: 'milestone', minutes, label: milestone.label, page_start: null, page_end: null, group: GROUP_MILESTONE });
+    ctx.drafts.push({
+      item,
+      date,
+      kind: 'milestone',
+      minutes,
+      label: milestone.label,
+      page_start: null,
+      page_end: null,
+      group: GROUP_MILESTONE,
+      order: milestone.seq,
+    });
   }
   if (budget <= 0) return { item, unplaced: 0, windowDays: days, blocked };
 
-  const pool: Pool = { unitMinutes: 1, chunkUnits: evenChunk(budget, days.length), minNewDayUnits: MIN_PIECE_MINUTES, days };
-  const { alloc, leftover } = runPool(ctx, pool, budget, resort);
+  const { alloc, leftover } = runPool(ctx, minutePool(days), budget, resort);
   pushMinuteDrafts(ctx, item, alloc, 'work', (m) => workLabel(item.title, m));
   return { item, unplaced: leftover, windowDays: days, blocked };
 }
@@ -517,6 +601,7 @@ function addPopQuizReviews(
         page_start: null,
         page_end: null,
         group: GROUP_POP_QUIZ,
+        order: 0,
       });
     }
   }
@@ -531,6 +616,7 @@ function materialize(drafts: Draft[], kept: EngineBlock[], histories: Map<string
       a.group - b.group ||
       rank(a.item) - rank(b.item) ||
       byString(a.item.id, b.item.id) ||
+      a.order - b.order ||
       (a.page_start ?? 0) - (b.page_start ?? 0) ||
       byString(a.label, b.label),
   );
@@ -607,7 +693,6 @@ function plan(input: PlanInput): InternalPlan {
     overCap: Math.floor(cap * OVERFLOW_FACTOR),
     isStudyDay: studyDayChecker(settings),
     book,
-    courses,
     drafts: [],
   };
   const histories = collectHistory(kept, today);

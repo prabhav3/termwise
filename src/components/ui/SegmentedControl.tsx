@@ -12,7 +12,7 @@ export interface SegmentOption<T extends string> {
 }
 
 export interface SegmentedControlProps<T extends string> {
-  options: ReadonlyArray<SegmentOption<T>>;
+  options: readonly SegmentOption<T>[];
   value: T;
   onChange: (value: T) => void;
   /** Names the group for VoiceOver, e.g. "Appearance". */

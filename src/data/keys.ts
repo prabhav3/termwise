@@ -19,6 +19,8 @@ export const queryKeys = {
   eventLinksFor: (connectionId: string) => ['eventLinks', connectionId] as const,
   lmsConnections: () => ['lmsConnections'] as const,
   lmsCourses: () => ['lmsCourses'] as const,
+  /** Live course list from Canvas (function call), kept under the lmsCourses root. */
+  canvasCourses: (connectionId: string) => ['lmsCourses', 'canvas', connectionId] as const,
   discrepancies: () => ['discrepancies'] as const,
   shares: () => ['shares'] as const,
   shareForCourse: (courseId: string) => ['shares', 'course', courseId] as const,

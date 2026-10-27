@@ -48,12 +48,12 @@ export function segmentPages(segments: PageSegment[]): number {
 }
 
 /** Sorts and merges overlapping ranges (adjacent ranges stay separate segments). */
-function normalizeRanges(ranges: Array<{ start: number; end: number }>): Array<{ start: number; end: number }> {
+function normalizeRanges(ranges: { start: number; end: number }[]): { start: number; end: number }[] {
   const valid = ranges
     .filter((r) => Number.isFinite(r.start) && Number.isFinite(r.end) && r.start > 0 && r.end >= r.start)
     .map((r) => ({ start: Math.floor(r.start), end: Math.floor(r.end) }))
     .sort((a, b) => a.start - b.start || a.end - b.end);
-  const merged: Array<{ start: number; end: number }> = [];
+  const merged: { start: number; end: number }[] = [];
   for (const r of valid) {
     const last = merged[merged.length - 1];
     if (last && r.start <= last.end) last.end = Math.max(last.end, r.end);

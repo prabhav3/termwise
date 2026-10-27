@@ -450,3 +450,54 @@ export function planDiscrepancyWrites(existing: ExistingDiscrepancy[], current: 
   const resolveIds = existing.filter((e) => e.status === 'open' && !currentKeys.has(e.dedupe_key)).map((e) => e.id);
   return { upsert, resolveIds };
 }
+
+// ---------------------------------------------------------------------------
+// Feed course labels → courses
+// ---------------------------------------------------------------------------
+
+export interface CourseRef {
+  id: string;
+  code: string | null;
+  title: string;
+}
+
+const compact = (s: string) => normalizeTitle(s).replace(/ /g, '');
+
+/** How well a feed course label names a course, in [0, 1]. */
+export function courseLabelScore(label: string, course: CourseRef): number {
+  const l = compact(label);
+  if (!l) return 0;
+  let best = 0;
+  if (course.code) {
+    const code = compact(course.code);
+    if (code && l === code) return 1;
+    // "PSY101-02-F26" contains "PSY101"; "PSY101" is contained in "PSY101 Intro to Psychology".
+    if (code.length >= 4 && (l.startsWith(code) || l.includes(code))) best = 0.9;
+  }
+  const t = compact(course.title);
+  if (t && l === t) return Math.max(best, 0.95);
+  return Math.max(best, titleSimilarity(label, course.title) * 0.85);
+}
+
+/**
+ * Maps feed course labels to courses, best score first and one-to-one. Labels without a
+ * confident match (≥ 0.7) are left out.
+ */
+export function matchFeedCourses(labels: string[], courses: CourseRef[]): Map<string, string> {
+  const scored: Array<{ label: string; courseId: string; score: number }> = [];
+  for (const label of labels) {
+    for (const course of courses) {
+      const score = courseLabelScore(label, course);
+      if (score >= 0.7) scored.push({ label, courseId: course.id, score });
+    }
+  }
+  scored.sort((a, b) => b.score - a.score || a.label.localeCompare(b.label));
+  const out = new Map<string, string>();
+  const used = new Set<string>();
+  for (const s of scored) {
+    if (out.has(s.label) || used.has(s.courseId)) continue;
+    out.set(s.label, s.courseId);
+    used.add(s.courseId);
+  }
+  return out;
+}

@@ -282,6 +282,19 @@ describe('planCalendarSync', () => {
     expect(plan.create.map((d) => d.entry.key)).toEqual(['item:a']);
   });
 
+  it('removes the old kind even when the new container was fully listed', () => {
+    const plan = planCalendarSync({
+      desired: [{ entry: entry('item:a', '2026-11-03'), hash: 'h-task' }],
+      links: [link('item:a', 'e-a', 'h', '2026-11-03', 'event')],
+      kind: 'task',
+      snapshot: { complete: true, observations: [] },
+      pendingChanges: noPending,
+    });
+    expect(plan.remove.map((l) => l.external_id)).toEqual(['e-a']);
+    expect(plan.dropLinks).toEqual([]);
+    expect(plan.create.map((d) => d.entry.key)).toEqual(['item:a']);
+  });
+
   it('adopts our orphaned events by key and deletes unwanted ones', () => {
     const plan = planCalendarSync({
       desired: [{ entry: entry('item:a', '2026-11-03'), hash: 'h' }],

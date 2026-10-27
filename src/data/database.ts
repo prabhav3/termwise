@@ -66,3 +66,8 @@ export interface Database {
 export type TableName = keyof Database['public']['Tables'];
 export type InsertRow<T extends TableName> = Database['public']['Tables'][T]['Insert'];
 export type UpdateRow<T extends TableName> = Database['public']['Tables'][T]['Update'];
+
+/** What the app sends when creating a row: the server fills user_id and the timestamps. */
+export type NewRow<T extends TableName> = Omit<InsertRow<T>, 'user_id' | 'created_at' | 'updated_at'>;
+/** Editable columns of an existing row. */
+export type RowPatch<T extends TableName> = Omit<UpdateRow<T>, 'id' | 'user_id' | 'created_at' | 'updated_at'>;

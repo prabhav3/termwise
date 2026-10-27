@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   assignmentWeight,
+  buildWeightDiscrepancies,
   type CanvasAssignment,
   type CanvasAssignmentGroup,
   CanvasClient,
@@ -11,6 +12,8 @@ import {
   htmlToText,
   inferCanvasKind,
   isMajorAssignment,
+  mapCanvasAssignment,
+  matchGroupsToComponents,
   normalizeCanvasBaseUrl,
   parseLinkHeader,
   scoreFromSubmission,
@@ -203,5 +206,95 @@ describe('CanvasClient', () => {
     const client = new CanvasClient(base, 't', { fetcher, sleepFn: async (ms) => void slept.push(ms) });
     expect((await client.getSelf()).name).toBe('Ada');
     expect(slept).toEqual([1000, 2000]);
+  });
+});
+
+describe('mapCanvasAssignment', () => {
+  const group = { weight: 40, derived: false, count: 2, dropLowest: 0 };
+
+  it('converts Canvas UTC instants into the student’s local date and time', () => {
+    const fields = mapCanvasAssignment(
+      assignment({
+        id: '77',
+        name: '  Midterm Exam ',
+        due_at: '2026-10-16T03:59:00Z', // 11:59 PM EDT on Oct 15
+        lock_at: '2026-10-16T05:00:00Z',
+        unlock_at: '2026-10-08T13:00:00Z',
+        points_possible: 100,
+        submission_types: ['online_quiz'],
+        description: '<p>Chapters 1&ndash;6</p>',
+        submission: { score: 88, grade: '88', workflow_state: 'graded', submitted_at: '2026-10-15T20:00:00Z' },
+      }),
+      { timeZone: 'America/New_York', group, includeScores: true },
+    );
+    expect(fields).toMatchObject({
+      external_id: '77',
+      title: 'Midterm Exam',
+      kind: 'exam',
+      description: 'Chapters 1–6',
+      due_date: '2026-10-15',
+      due_time: '23:59',
+      assigned_date: '2026-10-08',
+      lock_date: '2026-10-16',
+      lock_time: '01:00',
+      lms_due_at: '2026-10-16T03:59:00.000Z',
+      points_possible: 100,
+      score: 88,
+      complete: true,
+      is_major: true,
+      weight: 20,
+    });
+    // Same instant seen from Los Angeles stays on Oct 15 but three hours earlier.
+    expect(mapCanvasAssignment(assignment({ id: '1', name: 'X', due_at: '2026-10-16T03:59:00Z' }), { timeZone: 'America/Los_Angeles', group, includeScores: false })).toMatchObject({
+      due_date: '2026-10-15',
+      due_time: '20:59',
+      score: null,
+      complete: false,
+    });
+  });
+
+  it('keeps undated assignments undated and ignores bad values', () => {
+    const fields = mapCanvasAssignment(assignment({ id: '2', name: '', due_at: 'garbage', points_possible: -5 }), {
+      timeZone: 'Asia/Kolkata',
+      group: undefined,
+      includeScores: true,
+    });
+    expect(fields).toMatchObject({ title: 'Canvas assignment', due_date: null, due_time: null, lms_due_at: null, points_possible: null, weight: null });
+  });
+});
+
+describe('assignment groups ↔ syllabus components', () => {
+  const components = [
+    { id: 'c-quiz', name: 'Quizzes', weight: 20, canvas_group_id: null },
+    { id: 'c-mid', name: 'Midterm Exam', weight: 25, canvas_group_id: null },
+    { id: 'c-final', name: 'Final Exam', weight: 25, canvas_group_id: null },
+    { id: 'c-hw', name: 'Problem Sets', weight: 20, canvas_group_id: null },
+    { id: 'c-part', name: 'Participation', weight: 10, canvas_group_id: 'g-old' },
+  ];
+  const groups = [
+    { id: 'g-q', name: 'Quizzes' },
+    { id: 'g-ex', name: 'Exams' },
+    { id: 'g-hw', name: 'Homework' },
+    { id: 'g-old', name: 'Attendance & Engagement' },
+    { id: 'g-misc', name: 'Imported Assignments' },
+  ];
+
+  it('links groups to components by earlier link and name, letting one group cover several', () => {
+    const matched = matchGroupsToComponents(groups, components);
+    const ids = Object.fromEntries([...matched].map(([g, cs]) => [g, cs.map((c) => c.id).sort()]));
+    expect(ids).toEqual({ 'g-q': ['c-quiz'], 'g-ex': ['c-final', 'c-mid'], 'g-hw': ['c-hw'], 'g-old': ['c-part'] });
+  });
+
+  it('reports weight mismatches against the summed syllabus weight', () => {
+    const records = buildWeightDiscrepancies('canvas:c:k', [
+      { components: [components[1], components[2]], group: groups[1], weight: { weight: 50, derived: false, count: 2, dropLowest: 0 } },
+      { components: [components[0]], group: groups[0], weight: { weight: 15, derived: false, count: 5, dropLowest: 0 } },
+      { components: [components[3]], group: groups[2], weight: { weight: 21.5, derived: true, count: 8, dropLowest: 0 } },
+      { components: [components[4]], group: groups[3], weight: { weight: 4, derived: true, count: 3, dropLowest: 0 } },
+    ]);
+    expect(records.map((r) => r.dedupe_key)).toEqual(['canvas:c:k:weight_mismatch:group:g-q', 'canvas:c:k:weight_mismatch:group:g-old']);
+    expect(records[0]).toMatchObject({ kind: 'weight_mismatch', syllabus_value: '20%', lms_value: '15%', title: 'Quizzes' });
+    expect(records[1].lms_value).toBe('≈4%');
+    expect(records[1].detail).toContain("Canvas doesn't weight assignment groups");
   });
 });

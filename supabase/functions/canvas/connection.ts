@@ -1,22 +1,17 @@
 // Canvas connection plumbing: token sealing, connection lookup, error mapping, lms_courses.
 import type { CanvasCourseSummary } from '../_shared/api.ts';
+import { resolveTimeZone } from '../_shared/calendar-model.ts';
 import { CanvasClient, type CanvasCourse, CanvasError, hasSyllabusContent } from '../_shared/canvas-client.ts';
-import { decryptSecret, encryptSecret, importTokenKey, SecretFormatError } from '../_shared/crypto.ts';
-import { HttpError, requireEnv } from '../_shared/http.ts';
+import { HttpError } from '../_shared/http.ts';
 import { safeFetch, SafeFetchError } from '../_shared/safe-fetch.ts';
+import { openSecret, sealSecret } from '../_shared/secrets.ts';
 import { CONNECTION_COLUMNS, type ConnectionRow, type Db, dbFail, LMS_COURSE_COLUMNS, type LmsCourseRow } from './rows.ts';
 
-async function tokenKey(): Promise<CryptoKey> {
-  try {
-    return await importTokenKey(requireEnv('TOKEN_ENCRYPTION_KEY'));
-  } catch (err) {
-    if (err instanceof SecretFormatError) throw new HttpError('internal', 'Server is misconfigured (TOKEN_ENCRYPTION_KEY).');
-    throw err;
-  }
-}
+/** Matches the profiles.timezone column default. */
+const DEFAULT_TIME_ZONE = 'America/New_York';
 
-export async function sealToken(token: string): Promise<string> {
-  return encryptSecret(token, await tokenKey());
+export function sealToken(token: string): Promise<string> {
+  return sealSecret(token);
 }
 
 export function newCanvasClient(baseUrl: string, token: string): CanvasClient {
@@ -49,16 +44,9 @@ export async function clientForConnection(adminDb: Db, connection: ConnectionRow
     .maybeSingle()
     .overrideTypes<{ token_enc: string | null }, { merge: false }>();
   if (error) dbFail('secret lookup', error);
-  if (!data?.token_enc) {
-    await setStatus(adminDb, connection.id, 'needs_reauth', 'Missing access token.');
-    throw new HttpError('upstream_auth', 'Reconnect Canvas to keep syncing.');
-  }
-  let token: string;
-  try {
-    token = await decryptSecret(data.token_enc, await tokenKey());
-  } catch (err) {
-    if (!(err instanceof SecretFormatError)) throw err;
-    await setStatus(adminDb, connection.id, 'needs_reauth', 'Stored token could not be read.');
+  const token = await openSecret(data?.token_enc);
+  if (!token) {
+    await setStatus(adminDb, connection.id, 'needs_reauth', 'The saved access token could not be read.');
     throw new HttpError('upstream_auth', 'Reconnect Canvas to keep syncing.');
   }
   return newCanvasClient(connection.base_url, token);
@@ -153,4 +141,44 @@ export async function upsertLmsCourses(adminDb: Db, userId: string, connectionId
   if (error) dbFail('course list save', error);
   const order = new Map(rows.map((r, i) => [r.external_id, i]));
   return (data ?? []).sort((a, b) => (order.get(a.external_id) ?? 0) - (order.get(b.external_id) ?? 0));
+}
+
+/**
+ * Stores the student's active Canvas courses and forgets unlinked ones that are no longer active.
+ * Linked courses stay listed (after the active ones) so the app can still show and sync them.
+ */
+export async function refreshCourseList(
+  adminDb: Db,
+  userId: string,
+  connectionId: string,
+  courses: CanvasCourse[],
+): Promise<CanvasCourseSummary[]> {
+  const active = await upsertLmsCourses(adminDb, userId, connectionId, courses);
+  const activeIds = new Set(active.map((row) => row.external_id));
+  const { data, error } = await adminDb
+    .from('lms_courses')
+    .select(LMS_COURSE_COLUMNS)
+    .eq('connection_id', connectionId)
+    .order('name')
+    .overrideTypes<LmsCourseRow[], { merge: false }>();
+  if (error) dbFail('course list lookup', error);
+  const inactive = (data ?? []).filter((row) => !activeIds.has(row.external_id));
+  const stale = inactive.filter((row) => !row.linked_course_id).map((row) => row.id);
+  if (stale.length > 0) {
+    const { error: deleteError } = await adminDb.from('lms_courses').delete().in('id', stale);
+    if (deleteError) dbFail('course list cleanup', deleteError);
+  }
+  return [...active, ...inactive.filter((row) => row.linked_course_id)].map(courseSummary);
+}
+
+/** The student's timezone (profiles.timezone), falling back to the app default. */
+export async function profileTimeZone(userDb: Db, userId: string): Promise<string> {
+  const { data, error } = await userDb
+    .from('profiles')
+    .select('timezone')
+    .eq('id', userId)
+    .maybeSingle()
+    .overrideTypes<{ timezone: string }, { merge: false }>();
+  if (error) dbFail('profile lookup', error);
+  return resolveTimeZone(data?.timezone, DEFAULT_TIME_ZONE);
 }

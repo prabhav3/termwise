@@ -50,7 +50,7 @@ export interface EngineComponent {
 export interface EngineReading {
   textbook_id: string | null;
   chapters: string[];
-  page_ranges: Array<{ start: number; end: number }>;
+  page_ranges: { start: number; end: number }[];
   explicit_pages: number | null;
   description: string | null;
 }
@@ -79,7 +79,7 @@ export interface EngineTextbook {
   id: string;
   course_id: string;
   title: string;
-  chapters: Array<{ number: string; title: string | null; start_page: number | null; end_page: number | null }>;
+  chapters: { number: string; title: string | null; start_page: number | null; end_page: number | null }[];
 }
 
 export interface EngineTermEvent {
@@ -188,7 +188,7 @@ export interface PlanResult {
 export interface RescheduleResult extends PlanResult {
   /** What happened to the missed work, for a toast: "Spread 40 pages across Wed-Fri". */
   summary: string;
-  moved: Array<{ key: string; date: ISODate; minutes: number }>;
+  moved: { key: string; date: ISODate; minutes: number }[];
 }
 
 export type StressLevel = 'calm' | 'busy' | 'heavy' | 'red';

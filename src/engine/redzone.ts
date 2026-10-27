@@ -155,7 +155,7 @@ export function weeklyStress(
     const loadPoints = 35 * loadRatio;
     const score = Math.round(Math.min(100, loadPoints + Math.min(40, 4 * deadlinePoints) + (hasRed ? 25 : hasOrange ? 12 : 0)));
 
-    const drivers: Array<{ text: string; weight: number }> = [];
+    const drivers: { text: string; weight: number }[] = [];
     for (const zone of weekZones) drivers.push({ text: zone.message, weight: zone.severity === 'red' ? 25 : 12 });
     for (const item of due) {
       drivers.push({ text: `${item.title} (${courseLabel(courseById.get(item.course_id))})`, weight: 4 * pointsOf(item) });

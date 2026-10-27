@@ -393,10 +393,9 @@ export interface SharedSnapshot {
     | 'grade_scale'
     | 'policies'
   >;
-  components: Array<{ ref: UUID; name: string; weight: number; expected_count: number | null; drop_lowest: number }>;
-  textbooks: Array<{ ref: UUID; title: string; authors: string | null; chapters: Chapter[] }>;
-  items: Array<
-    Pick<
+  components: { ref: UUID; name: string; weight: number; expected_count: number | null; drop_lowest: number }[];
+  textbooks: { ref: UUID; title: string; authors: string | null; chapters: Chapter[] }[];
+  items: (Pick<
       Item,
       | 'title'
       | 'kind'
@@ -410,9 +409,8 @@ export interface SharedSnapshot {
       | 'reading'
       | 'pages'
       | 'is_major'
-    > & { component_ref: UUID | null }
-  >;
-  term_events: Array<Pick<TermEvent, 'title' | 'kind' | 'start_date' | 'end_date'>>;
+    > & { component_ref: UUID | null })[];
+  term_events: Pick<TermEvent, 'title' | 'kind' | 'start_date' | 'end_date'>[];
 }
 
 /** Return value of rpc('get_shared_timeline'). */

@@ -19,17 +19,22 @@ export async function requireUserId(): Promise<string> {
   return id;
 }
 
+// Typed on the whole response (not `data` alone) so supabase-js' success | failure union keeps
+// its row type instead of collapsing to `null` during inference.
+
 /** Returns `data` or throws an AppError. */
-export function unwrap<T>({ data, error }: Result<T>): T {
-  if (error) throw toAppError(error);
-  if (data === null) throw toAppError({ code: 'PGRST116', message: 'No rows', details: null });
-  return data;
+export function unwrap<R extends Result<unknown>>(result: R): NonNullable<R['data']> {
+  if (result.error) throw toAppError(result.error);
+  if (result.data === null || result.data === undefined) {
+    throw toAppError({ code: 'PGRST116', message: 'No rows', details: null });
+  }
+  return result.data as NonNullable<R['data']>;
 }
 
-/** Like unwrap, but a missing row is `null` (for maybeSingle()). */
-export function unwrapMaybe<T>({ data, error }: Result<T>): T | null {
-  if (error) throw toAppError(error);
-  return data;
+/** Like unwrap, but a missing row is `null` (for maybeSingle() and RPCs that may return null). */
+export function unwrapMaybe<R extends Result<unknown>>(result: R): R['data'] | null {
+  if (result.error) throw toAppError(result.error);
+  return result.data ?? null;
 }
 
 /** Throws on error for mutations that return nothing. */
@@ -44,7 +49,7 @@ export function check({ error }: { error: unknown }): void {
 export async function fetchAllPages<T>(page: (from: number, to: number) => PromiseLike<Result<T[]>>): Promise<T[]> {
   const rows: T[] = [];
   for (let from = 0; ; from += PAGE_SIZE) {
-    const batch = unwrap(await page(from, from + PAGE_SIZE - 1));
+    const batch: T[] = unwrap(await page(from, from + PAGE_SIZE - 1));
     rows.push(...batch);
     if (batch.length < PAGE_SIZE) return rows;
   }
@@ -70,4 +75,9 @@ export function upsertInList<T extends { id: string }>(client: QueryClient, key:
 
 export function removeFromList<T extends { id: string }>(client: QueryClient, key: QueryKey, id: string): void {
   client.setQueryData<T[]>(key, (current) => current?.filter((row) => row.id !== id));
+}
+
+/** Marks several roots stale at once (each refetches if mounted). */
+export async function invalidateAll(client: QueryClient, keys: readonly QueryKey[]): Promise<void> {
+  await Promise.all(keys.map((queryKey) => client.invalidateQueries({ queryKey })));
 }

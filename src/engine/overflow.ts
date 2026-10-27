@@ -17,7 +17,7 @@ export interface OverflowContext {
   isStudyDay: (date: ISODate) => boolean;
   book: LoadBook;
   /** Every newly planned piece of work, for finding low-impact work to drop. */
-  scheduled: ReadonlyArray<{ item: AnnotatedItem; date: ISODate; minutes: number }>;
+  scheduled: readonly { item: AnnotatedItem; date: ISODate; minutes: number }[];
 }
 
 /** Latest date before the window from which free capacity covers the shortfall. */

@@ -96,7 +96,7 @@ export function placeFixed(
   limits: number[],
   stick: boolean,
 ): ISODate | null {
-  const attempts: Array<[ISODate, number]> = stick
+  const attempts: [ISODate, number][] = stick
     ? candidates.flatMap((day) => limits.map((limit): [ISODate, number] => [day, limit]))
     : limits.flatMap((limit) => candidates.map((day): [ISODate, number] => [day, limit]));
   for (const [day, limit] of attempts) {
