@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "termwise",
+    "name": "Termwise",
     "slug": "termwise",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -8,11 +8,17 @@
     "scheme": "termwise",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "bundleIdentifier": "com.prabhav3.termwise",
+      "supportsTablet": false,
+      "usesAppleSignIn": true,
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
+      "package": "com.prabhav3.termwise",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#FFF4DE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
@@ -20,7 +26,6 @@
       "predictiveBackGestureEnabled": false
     },
     "web": {
-      "output": "server",
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
@@ -28,14 +33,41 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#208AEF",
+          "backgroundColor": "#FFF4DE",
           "image": "./assets/images/splash-icon.png",
-          "imageWidth": 76
+          "imageWidth": 120,
+          "dark": {
+            "backgroundColor": "#141414",
+            "image": "./assets/images/splash-icon.png"
+          }
         }
       ],
+      "expo-font",
       "expo-secure-store",
       "expo-localization",
-      "@react-native-community/datetimepicker"
+      "expo-apple-authentication",
+      "@react-native-community/datetimepicker",
+      [
+        "expo-calendar",
+        {
+          "calendarPermission": "Termwise adds your deadlines and study blocks to a calendar you choose, so your plan shows up next to the rest of your week.",
+          "remindersPermission": "Termwise can add your deadlines to Reminders so you get nudged before they are due."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Termwise reads the syllabus or table-of-contents photos you pick so it can build your study plan.",
+          "cameraPermission": "Termwise uses the camera to photograph a printed syllabus or a textbook's table of contents.",
+          "microphonePermission": false
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "enableRemoteNotifications": false
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
