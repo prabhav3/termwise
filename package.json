@@ -76,5 +76,6 @@
     "check:bundle": "expo export --platform ios --output-dir dist --clear",
     "check": "npm run typecheck && npm run test && npm run check:db && npm run check:functions"
   },
-  "private": true
+  "private": true,
+  "license": "MIT"
 }
