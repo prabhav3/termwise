@@ -37,6 +37,7 @@ import type { Course, GradingComponent, Item, PlanBlock, Profile, TermEvent, Tex
 import { useAuth } from './auth';
 import { addDaysISO, todayISO, zonedDateTimeToDate, type ISODate } from './dates';
 import { AppError, toAppError } from './functions';
+import { normalizeItemRow, normalizeTextbookRow } from './json-columns';
 import { scheduleTriageNotifications } from './notifications';
 import { queryClient } from './query-client';
 import { readString, storageKeys, writeString } from './storage';
@@ -82,8 +83,9 @@ export function buildPlanInput(source: PlannerSource, today: ISODate): PlanInput
   return {
     courses: source.courses.map(toEngineCourse),
     components: source.components,
-    items: source.items,
-    textbooks: source.textbooks,
+    // Cached rows may come from a write that skipped the read-time reshaping: guard the engine too.
+    items: source.items.map(normalizeItemRow),
+    textbooks: source.textbooks.map(normalizeTextbookRow),
     termEvents: source.termEvents,
     existingBlocks: source.blocks,
     settings: plannerSettings(source.profile, today),
@@ -232,6 +234,20 @@ async function runReplan(): Promise<ReplanOutcome> {
   }
 }
 
+/** The tail of the plan_blocks write queue; never rejects. */
+let writing: Promise<unknown> = Promise.resolve();
+
+/**
+ * Runs `task` after every plan_blocks write queued before it (replans and block status changes),
+ * so a replan never saves blocks it loaded before a status change landed. Tasks must not call
+ * replan() (it would wait for them): use runReplan() inside.
+ */
+function exclusive<T>(task: () => Promise<T>): Promise<T> {
+  const run = writing.then(task);
+  writing = run.catch(() => undefined);
+  return run;
+}
+
 let active: Promise<ReplanOutcome> | null = null;
 let queued: Promise<ReplanOutcome> | null = null;
 
@@ -241,7 +257,7 @@ let queued: Promise<ReplanOutcome> | null = null;
  */
 export function replan(): Promise<ReplanOutcome> {
   if (!active) {
-    active = runReplan().finally(() => {
+    active = exclusive(runReplan).finally(() => {
       active = null;
     });
     return active;
@@ -270,32 +286,55 @@ async function findStoredBlock(key: string): Promise<PlanBlock | null> {
   return fresh.find((block) => block.key === key) ?? null;
 }
 
-/** A block shown from the in-memory plan may not be saved yet: save the plan first. */
-async function ensureStoredBlock(key: string): Promise<PlanBlock> {
-  const stored = await findStoredBlock(key);
-  if (stored) return stored;
-  await replan();
-  const saved = await findStoredBlock(key);
-  if (!saved) throw new AppError('not_found', 'That block is no longer in your plan. Pull to refresh.');
-  return saved;
+/**
+ * Whether a stored row is the same chunk of work as a block from the in-memory plan. Engine keys
+ * are renumbered on every rebuild, so one key can name different pages in memory and in the DB.
+ */
+export function sameWork(stored: PlanBlock, shown: EngineBlock): boolean {
+  return (
+    stored.item_id === shown.item_id &&
+    stored.date === shown.date &&
+    stored.kind === shown.kind &&
+    stored.page_start === shown.page_start &&
+    stored.page_end === shown.page_end &&
+    stored.minutes === Math.round(shown.minutes)
+  );
 }
 
-/** Marks a block done, then replans so the remaining work shrinks accordingly. */
-export async function markBlockDone(key: string): Promise<ReplanOutcome> {
+/**
+ * The stored row for the block on screen (the in-memory plan). When it is missing or holds other
+ * work, the saved plan is older than the one shown (not saved yet, or the day rolled over): save
+ * the plan first. Call inside exclusive().
+ */
+async function storedBlockFor(shown: EngineBlock): Promise<PlanBlock> {
+  let stored = await findStoredBlock(shown.key);
+  if (!stored || !sameWork(stored, shown)) {
+    await runReplan();
+    stored = await findStoredBlock(shown.key);
+  }
+  if (!stored) throw new AppError('not_found', 'That block is no longer in your plan. Pull to refresh.');
+  if (!sameWork(stored, shown)) throw new AppError('conflict', 'Your plan just changed. Check that block and try again.');
+  return stored;
+}
+
+/** Marks the block the student saw done, then replans so the remaining work shrinks accordingly. */
+export async function markBlockDone(shown: EngineBlock): Promise<ReplanOutcome> {
   try {
-    const block = await ensureStoredBlock(key);
-    const completedAt = new Date().toISOString();
-    const saved = unwrap(
-      await supabase
-        .from('plan_blocks')
-        .update({ status: 'done', completed_at: completedAt })
-        .eq('id', block.id)
-        .select('*')
-        .single(),
-    );
-    queryClient.setQueryData<PlanBlock[]>(queryKeys.planBlocks(), (current) =>
-      current?.map((existing) => (existing.id === saved.id ? saved : existing)),
-    );
+    await exclusive(async () => {
+      const block = await storedBlockFor(shown);
+      const completedAt = new Date().toISOString();
+      const saved = unwrap(
+        await supabase
+          .from('plan_blocks')
+          .update({ status: 'done', completed_at: completedAt })
+          .eq('id', block.id)
+          .select('*')
+          .single(),
+      );
+      queryClient.setQueryData<PlanBlock[]>(queryKeys.planBlocks(), (current) =>
+        current?.map((existing) => (existing.id === saved.id ? saved : existing)),
+      );
+    });
     return await replan();
   } catch (error) {
     throw toAppError(error);
@@ -309,19 +348,20 @@ export interface MissOutcome {
   plan: PlanResult;
 }
 
-/** Marks a block missed and spreads its work over the study days left before the deadline. */
-export async function markBlockMissed(key: string): Promise<MissOutcome> {
+/** Marks the block the student saw missed and spreads its work over the study days left before the deadline. */
+export async function markBlockMissed(shown: EngineBlock): Promise<MissOutcome> {
   try {
-    await ensureStoredBlock(key);
-    // Wait for any replan in flight so the reschedule starts from the saved plan.
-    await active?.catch(() => undefined);
-    const source = await loadSource();
-    const today = todayISO(source.profile.timezone);
-    const input = buildPlanInput(source, today);
-    const result = runEngine(() => rescheduleAfterMiss(input, key));
-    await persistBlocks(source.blocks, result.blocks, today);
-    await refreshNotifications(source, result, input.settings);
-    return { summary: result.summary, moved: result.moved, plan: result };
+    // Queued behind any replan in flight, so the reschedule starts from the saved plan.
+    return await exclusive(async () => {
+      await storedBlockFor(shown);
+      const source = await loadSource();
+      const today = todayISO(source.profile.timezone);
+      const input = buildPlanInput(source, today);
+      const result = runEngine(() => rescheduleAfterMiss(input, shown.key));
+      await persistBlocks(source.blocks, result.blocks, today);
+      await refreshNotifications(source, result, input.settings);
+      return { summary: result.summary, moved: result.moved, plan: result };
+    });
   } catch (error) {
     throw toAppError(error);
   }

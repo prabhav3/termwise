@@ -257,7 +257,8 @@ async function observeLinks(
   today: ISODate,
 ): Promise<Map<string, Observation>> {
   const observed = new Map<string, Observation>();
-  const relevant = links.filter((link) => link.external_kind === kind);
+  // Tombstones point at events the student already deleted: nothing to look up.
+  const relevant = links.filter((link) => link.external_kind === kind && !link.deleted_externally);
   if (relevant.length === 0) return observed;
 
   if (kind === 'event') {
@@ -375,6 +376,7 @@ function toLinkState(link: CalendarEventLink): LinkState {
     external_kind: link.external_kind,
     pushed_hash: link.pushed_hash,
     pushed_date: link.pushed_date,
+    deleted_externally: link.deleted_externally ?? false,
   };
 }
 
@@ -444,12 +446,14 @@ async function runAppleSync(connectionId: string): Promise<AppleSyncResult> {
     });
     const pending = new Map<string, PendingChange>();
     const blockedItems = new Set<string>();
+    const doneItems = new Set<string>();
     for (const item of source.items) {
+      if (item.status === 'done') doneItems.add(item.id);
       if (!item.external_change) continue;
       if (item.external_change.provider === 'apple') pending.set(item.id, item.external_change);
       else blockedItems.add(item.id);
     }
-    const plan = planAppleSync({ desired, links, kind, observed, pending, blockedItems });
+    const plan = planAppleSync({ desired, links, kind, observed, pending, blockedItems, doneItems });
 
     // 3. Apply on the device.
     const linkWrites: { key: string; external_id: string; pushed_hash: string; pushed_date: ISODate }[] = [];
@@ -520,9 +524,20 @@ async function runAppleSync(connectionId: string): Promise<AppleSyncResult> {
             pushed_hash: write.pushed_hash,
             pushed_date: write.pushed_date,
             last_seen_at: seenAt,
+            deleted_externally: false,
           })),
           { onConflict: 'connection_id,key' },
         ),
+      );
+    }
+    // Deleted on the device: keep the link so the item isn't pushed again (see planAppleSync).
+    for (const batch of chunk(plan.tombstones.map((link) => link.id), LINK_BATCH)) {
+      check(
+        await supabase
+          .from('calendar_event_links')
+          .update({ deleted_externally: true, last_seen_at: seenAt })
+          .eq('connection_id', connectionId)
+          .in('id', batch),
       );
     }
 

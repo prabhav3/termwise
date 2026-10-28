@@ -72,6 +72,7 @@ function linkFor(desired: DesiredEntry, overrides: Partial<LinkState> = {}): Lin
     external_kind: 'event',
     pushed_hash: desired.hash,
     pushed_date: desired.entry.date,
+    deleted_externally: false,
     ...overrides,
   };
 }
@@ -191,13 +192,53 @@ describe('planAppleSync', () => {
     expect(plan.externalChanges).toHaveLength(0);
   });
 
-  it('reports a deleted item event and drops its link', () => {
+  it('reports a deleted item event and keeps its link as a tombstone', () => {
     const link = linkFor(desired);
     const observed = new Map<string, Observation>([[link.external_id, { found: false }]]);
     const plan = planAppleSync({ desired: [desired], links: [link], kind: 'event', observed, pending: noPending });
     expect(plan.externalChanges).toEqual([{ itemId: 'i1', key: 'item:i1', newDate: null, newTime: null, deleted: true }]);
-    expect(plan.dropLinks).toEqual([link]);
+    expect(plan.tombstones).toEqual([link]);
+    expect(plan.dropLinks).toHaveLength(0);
     expect(plan.create).toHaveLength(0);
+    expect(isPlanEmpty(plan)).toBe(false);
+  });
+
+  it('keeps an accepted deletion ("Mark done") off the device, and brings it back on "Keep it" or reopen', () => {
+    const tombstone = linkFor(desired, { deleted_externally: true });
+    const deletedPending = new Map<string, PendingChange>([['i1', { new_due_date: null, new_due_time: null, deleted: true }]]);
+    const run = (link: LinkState, wanted: DesiredEntry, pending: ReadonlyMap<string, PendingChange>, done: string[]) =>
+      planAppleSync({ desired: [wanted], links: [link], kind: 'event', observed: new Map(), pending, doneItems: new Set(done) });
+
+    // Waiting for the decision.
+    const waiting = run(tombstone, desired, deletedPending, []);
+    expect(waiting.create).toHaveLength(0);
+    expect(isPlanEmpty(waiting)).toBe(true);
+
+    // "Mark done": status done, external_change cleared; the ✓ title changes the hash.
+    const [doneDesired] = buildDesiredEntries(input({ items: [item({ status: 'done' })] }));
+    expect(doneDesired.hash).not.toBe(desired.hash);
+    const accepted = run(tombstone, doneDesired, noPending, ['i1']);
+    expect(accepted.create).toHaveLength(0);
+    expect(accepted.update).toHaveLength(0);
+    expect(accepted.dropLinks).toHaveLength(0);
+    expect(isPlanEmpty(accepted)).toBe(true);
+
+    // "Keep it" clears pushed_hash (useKeepTermwiseDate): recreate, even for an already-done item.
+    const kept = run({ ...tombstone, pushed_hash: null }, doneDesired, noPending, ['i1']);
+    expect(kept.dropLinks).toEqual([{ ...tombstone, pushed_hash: null }]);
+    expect(kept.create).toEqual([doneDesired]);
+
+    // The student reopens the item later.
+    const reopened = run(tombstone, desired, noPending, []);
+    expect(reopened.dropLinks).toEqual([tombstone]);
+    expect(reopened.create).toEqual([desired]);
+  });
+
+  it('drops a tombstone without touching the device once the item is no longer wanted', () => {
+    const tombstone = linkFor(desired, { deleted_externally: true });
+    const plan = planAppleSync({ desired: [], links: [tombstone], kind: 'event', observed: new Map(), pending: noPending, doneItems: new Set(['i1']) });
+    expect(plan.dropLinks).toEqual([tombstone]);
+    expect(plan.remove).toHaveLength(0);
   });
 
   it('does not recreate an item event the student deleted while the decision is pending', () => {

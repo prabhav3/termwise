@@ -27,7 +27,7 @@ interface ActionSpec {
 /** The choices that make sense for each kind; the first one is the primary button. */
 function actionsFor(discrepancy: LmsDiscrepancy, lmsName: string, provider: LmsProvider | null): ActionSpec[] {
   const hasLmsDate = parseLmsStamp(discrepancy.lms_value) !== null;
-  const keep: ActionSpec = { action: 'keep_syllabus', label: 'Keep syllabus', hint: 'Marks this as resolved without changes' };
+  const keep: ActionSpec = { action: 'keep_syllabus', label: 'Keep syllabus', hint: 'Keeps the syllabus as it is' };
   switch (discrepancy.kind) {
     case 'date_mismatch':
       return discrepancy.item_id && hasLmsDate

@@ -80,7 +80,7 @@ function adapterFor(provider: CloudCalendarProvider, tokens: Awaited<ReturnType<
 async function loadLinks(db: SupabaseClient, connectionId: string): Promise<LinkState[]> {
   const { data, error } = await db
     .from('calendar_event_links')
-    .select('id, key, external_id, external_kind, pushed_hash, pushed_date')
+    .select('id, key, external_id, external_kind, pushed_hash, pushed_date, deleted_externally')
     .eq('connection_id', connectionId)
     .overrideTypes<LinkState[], { merge: false }>();
   if (error) throw new Error(`calendar-sync: link lookup failed (${error.code})`);
@@ -151,12 +151,14 @@ export async function syncConnection(deps: RunDeps, connection: ConnectionRow, c
     const desired: DesiredEntry[] = await Promise.all(entries.map(async (entry) => ({ entry, hash: await entryHash(entry, kind) })));
     const pending = new Map<string, PendingChange>();
     const otherProviderPending = new Set<string>();
+    const doneItems = new Set<string>();
     for (const item of calendar.items.values()) {
+      if (item.status === 'done') doneItems.add(item.id);
       if (!item.external_change) continue;
       if (item.external_change.provider === connection.provider) pending.set(item.id, item.external_change);
       else otherProviderPending.add(item.id);
     }
-    const plan = planCalendarSync({ desired, links, kind, snapshot, pendingChanges: pending });
+    const plan = planCalendarSync({ desired, links, kind, snapshot, pendingChanges: pending, doneItems });
 
     // 3. Apply.
     const linkWrites: LinkWrite[] = [];
@@ -245,10 +247,21 @@ export async function syncConnection(deps: RunDeps, connection: ConnectionRow, c
           pushed_hash: w.pushed_hash,
           pushed_date: w.pushed_date,
           last_seen_at: now,
+          // Clears a tombstone whose row could not be deleted above.
+          deleted_externally: false,
         })),
         { onConflict: 'connection_id,key' },
       );
       if (error) log.add(`Couldn't record what was sent to ${label} (${error.code}); the next sync will repair it.`);
+    }
+    // Deleted in their calendar: keep the row so the item isn't pushed again (see planCalendarSync).
+    const tombstones = plan.tombstones.map((l) => l.id);
+    for (let i = 0; i < tombstones.length; i += 200) {
+      const { error } = await deps.userDb
+        .from('calendar_event_links')
+        .update({ deleted_externally: true, last_seen_at: now })
+        .in('id', tombstones.slice(i, i + 200));
+      if (error) log.add(`Couldn't record an entry you deleted in ${label} (${error.code}).`);
     }
     const seen = plan.unchanged.map((l) => l.id);
     for (let i = 0; i < seen.length; i += 200) {

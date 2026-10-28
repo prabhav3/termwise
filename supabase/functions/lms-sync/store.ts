@@ -141,13 +141,16 @@ export async function loadCourses(userDb: Db): Promise<CourseRow[]> {
   return data ?? [];
 }
 
+/**
+ * Every item of the courses, including source 'lms' ones ("Add to my plan" on a missing_in_syllabus
+ * discrepancy): they must pair with their feed event, or the next sync offers them again.
+ */
 export async function loadItems(userDb: Db, courseIds: string[]): Promise<ItemRow[]> {
   if (courseIds.length === 0) return [];
   const { data, error } = await userDb
     .from('items')
     .select('id, course_id, title, kind, due_date, due_time, is_major, points_possible, source')
     .in('course_id', courseIds)
-    .neq('source', 'lms')
     .overrideTypes<ItemRow[], { merge: false }>();
   if (error) dbFail('item lookup', error);
   return data ?? [];

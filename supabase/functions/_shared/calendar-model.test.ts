@@ -165,6 +165,7 @@ const link = (key: string, externalId: string, hash: string | null, pushedDate: 
   external_kind: kind,
   pushed_hash: hash,
   pushed_date: pushedDate,
+  deleted_externally: false,
 });
 const noPending = new Map<string, PendingChange>();
 
@@ -233,17 +234,83 @@ describe('planCalendarSync', () => {
       pendingChanges: noPending,
     });
     expect(first.externalChanges).toEqual([{ itemId: 'a', key: 'item:a', newDate: null, newTime: null, deleted: true }]);
-    expect(first.dropLinks.map((l) => l.key)).toEqual(['item:a']);
+    expect(first.tombstones.map((l) => l.key)).toEqual(['item:a']);
+    expect(first.dropLinks).toEqual([]);
     expect(first.create).toEqual([]);
 
+    const pendingDeletion = new Map([['a', { new_due_date: null, new_due_time: null, deleted: true }]]);
     const second = planCalendarSync({
+      desired: [{ entry: entry('item:a', '2026-11-03'), hash: 'h' }],
+      links: [{ ...link('item:a', 'e-a', 'h', '2026-11-03'), deleted_externally: true }],
+      kind: 'event',
+      snapshot: { complete: true, observations: [] },
+      pendingChanges: pendingDeletion,
+    });
+    expect(second).toMatchObject({ create: [], update: [], dropLinks: [], tombstones: [], externalChanges: [] });
+
+    // A link dropped before tombstones existed.
+    const legacy = planCalendarSync({
       desired: [{ entry: entry('item:a', '2026-11-03'), hash: 'h' }],
       links: [],
       kind: 'event',
       snapshot: { complete: true, observations: [] },
-      pendingChanges: new Map([['a', { new_due_date: null, new_due_time: null, deleted: true }]]),
+      pendingChanges: pendingDeletion,
     });
-    expect(second.create).toEqual([]);
+    expect(legacy.create).toEqual([]);
+  });
+
+  it('keeps an accepted deletion ("Mark done") off the calendar on later syncs', () => {
+    const tombstone = { ...link('item:a', 'e-a', 'h', '2026-11-03'), deleted_externally: true };
+    // Done changes the summary ("✓ …"), so the desired hash no longer matches pushed_hash.
+    const doneEntry = { entry: { ...entry('item:a', '2026-11-03'), title: '✓ item:a' }, hash: 'h-done' };
+    for (const snapshot of [null, { complete: true, observations: [] }, { complete: false, observations: [] }]) {
+      const plan = planCalendarSync({
+        desired: [doneEntry],
+        links: [tombstone],
+        kind: 'event',
+        snapshot,
+        pendingChanges: noPending,
+        doneItems: new Set(['a']),
+      });
+      expect(plan).toMatchObject({ create: [], update: [], remove: [], dropLinks: [], removeOrphans: [], externalChanges: [] });
+    }
+    // Also after switching delivery to tasks.
+    const switched = planCalendarSync({
+      desired: [{ ...doneEntry, hash: 'h-done-task' }],
+      links: [tombstone],
+      kind: 'task',
+      snapshot: { complete: true, observations: [] },
+      pendingChanges: noPending,
+      doneItems: new Set(['a']),
+    });
+    expect(switched.create).toEqual([]);
+  });
+
+  it('brings a deleted item back on "Keep it" (pushed_hash cleared) or when the item is reopened', () => {
+    const tombstone = { ...link('item:a', 'e-a', 'h', '2026-11-03'), deleted_externally: true };
+    const desired = { entry: entry('item:a', '2026-11-03'), hash: 'h' };
+    const kept = planCalendarSync({
+      desired: [desired],
+      links: [{ ...tombstone, pushed_hash: null }],
+      kind: 'event',
+      snapshot: { complete: true, observations: [] },
+      pendingChanges: noPending,
+      doneItems: new Set(['a']),
+    });
+    expect(kept.dropLinks.map((l) => l.id)).toEqual([tombstone.id]);
+    expect(kept.create).toEqual([desired]);
+    expect(kept.update).toEqual([]);
+
+    const reopened = planCalendarSync({ desired: [desired], links: [tombstone], kind: 'event', snapshot: null, pendingChanges: noPending });
+    expect(reopened.dropLinks.map((l) => l.id)).toEqual([tombstone.id]);
+    expect(reopened.create).toEqual([desired]);
+  });
+
+  it('drops a tombstone without deleting anything once the item is no longer wanted', () => {
+    const tombstone = { ...link('item:a', 'e-a', 'h', '2026-11-03'), deleted_externally: true };
+    const plan = planCalendarSync({ desired: [], links: [tombstone], kind: 'event', snapshot: null, pendingChanges: noPending, doneItems: new Set(['a']) });
+    expect(plan.dropLinks.map((l) => l.id)).toEqual([tombstone.id]);
+    expect(plan.remove).toEqual([]);
   });
 
   it('does not re-report a change the student has not reviewed yet', () => {

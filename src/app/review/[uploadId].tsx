@@ -1,5 +1,5 @@
 import { router, Stack, useLocalSearchParams } from 'expo-router';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { SyllabusExtraction, TocExtraction } from '@shared/extraction.ts';
@@ -16,11 +16,15 @@ import { errorMessage } from '@/lib/functions';
 import { useTheme } from '@/theme';
 import type { SyllabusUpload } from '@/types/db';
 
-type Parsed =
-  | { kind: 'syllabus'; value: SyllabusExtraction }
-  | { kind: 'toc'; value: TocExtraction }
-  | { kind: 'invalid' }
-  | null;
+type Reviewable = { kind: 'syllabus'; value: SyllabusExtraction } | { kind: 'toc'; value: TocExtraction };
+
+type Parsed = Reviewable | { kind: 'invalid' } | null;
+
+/** The review on screen while its import runs. */
+interface HeldReview {
+  upload: SyllabusUpload;
+  parsed: Reviewable;
+}
 
 function readExtraction(upload: SyllabusUpload | null): Parsed {
   if (!upload || upload.status !== 'needs_review') return null;
@@ -43,6 +47,9 @@ export default function ReviewScreen() {
   const discard = useDiscardUpload();
   const upload = status.upload;
   const parsed = useMemo(() => readExtraction(upload), [upload]);
+  // An import marks the upload imported before it finishes (cache refresh, replan). The review
+  // stays mounted until then: unmounting it would drop the import's toast and navigation.
+  const [held, setHeld] = useState<HeldReview | null>(null);
   const what = upload?.kind === 'toc' ? 'table of contents' : 'syllabus';
 
   const leave = () => goBackOr(routes.coursesTab());
@@ -162,7 +169,10 @@ export default function ReviewScreen() {
     );
   }
 
-  if (upload.status === 'imported') {
+  const review: HeldReview | null =
+    held?.upload.id === upload.id ? held : parsed && parsed.kind !== 'invalid' ? { upload, parsed } : null;
+
+  if (!review && upload.status === 'imported') {
     const courseId = upload.course_id;
     return (
       <Screen edges={['bottom']}>
@@ -178,7 +188,7 @@ export default function ReviewScreen() {
     );
   }
 
-  if (!parsed || parsed.kind === 'invalid') {
+  if (!review) {
     return (
       <Screen edges={['bottom']}>
         {header}
@@ -195,17 +205,21 @@ export default function ReviewScreen() {
     );
   }
 
-  if (parsed.kind === 'toc') {
+  // Held from the first tap until the import fails; on success the screen navigates away.
+  const onImportingChange = (importing: boolean) => setHeld(importing ? review : null);
+
+  if (review.parsed.kind === 'toc') {
     return (
       <>
         {header}
         <TocReview
           key={upload.id}
-          upload={upload}
-          extraction={parsed.value}
+          upload={review.upload}
+          extraction={review.parsed.value}
           initialTextbookId={textbookId}
           discarding={discard.isPending}
           onDiscard={discardNow}
+          onImportingChange={onImportingChange}
           onSaved={(savedId) => {
             // Started from that textbook's screen: it is right below, showing the new map.
             if (savedId === textbookId && router.canGoBack()) router.back();
@@ -221,10 +235,11 @@ export default function ReviewScreen() {
       {header}
       <SyllabusReview
         key={upload.id}
-        upload={upload}
-        extraction={parsed.value}
+        upload={review.upload}
+        extraction={review.parsed.value}
         discarding={discard.isPending}
         onDiscard={discardNow}
+        onImportingChange={onImportingChange}
         onImported={(courseId) => router.replace(routes.course(courseId))}
       />
     </>

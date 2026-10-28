@@ -7,7 +7,9 @@
 //   * Our side wins whenever our payload changed since the last push (hash differs, or the link's
 //     pushed_hash is null — that is how "Keep mine" asks for a re-push).
 //   * Otherwise a date the student changed in Calendar becomes an external change to review, and a
-//     deleted event becomes { deleted: true } (its link is dropped).
+//     deleted event becomes { deleted: true }. Its link stays as a tombstone (deleted_externally),
+//     which keeps the item off the device while it is done or the deletion is pending; "Keep it"
+//     (pushed_hash null) or reopening the item drops the tombstone and recreates the event.
 //   * A deleted plan-block event stays deleted until the block itself changes.
 //   * Entries no longer wanted are deleted from the device.
 
@@ -259,6 +261,8 @@ export interface LinkState {
   external_kind: ExternalKind;
   pushed_hash: string | null;
   pushed_date: ISODate | null;
+  /** Tombstone: the student deleted this item's event / reminder on the device. */
+  deleted_externally: boolean;
 }
 
 /** What the device reports about one linked event / reminder. */
@@ -291,6 +295,8 @@ export interface SyncPlanInput {
   pending: ReadonlyMap<string, PendingChange>;
   /** Items with an undecided change from another provider: one pending decision at a time. */
   blockedItems?: ReadonlySet<string>;
+  /** Items with status 'done': an event the student deleted on the device stays deleted. */
+  doneItems?: ReadonlySet<string>;
 }
 
 export interface SyncPlan {
@@ -301,6 +307,8 @@ export interface SyncPlan {
   remove: LinkState[];
   /** The external object is already gone: delete only the link. */
   dropLinks: LinkState[];
+  /** An item's event the student deleted: keep its link, flagged deleted_externally. */
+  tombstones: LinkState[];
   externalChanges: DetectedChange[];
   unchanged: LinkState[];
 }
@@ -315,9 +323,10 @@ function samePending(existing: PendingChange | undefined, change: DetectedChange
 }
 
 export function planAppleSync(input: SyncPlanInput): SyncPlan {
-  const plan: SyncPlan = { create: [], update: [], remove: [], dropLinks: [], externalChanges: [], unchanged: [] };
+  const plan: SyncPlan = { create: [], update: [], remove: [], dropLinks: [], tombstones: [], externalChanges: [], unchanged: [] };
   const desiredByKey = new Map(input.desired.map((desired) => [desired.entry.key, desired]));
   const blocked = input.blockedItems ?? new Set<string>();
+  const done = input.doneItems ?? new Set<string>();
   const handledKeys = new Set<string>();
 
   const report = (change: DetectedChange) => {
@@ -327,6 +336,21 @@ export function planAppleSync(input: SyncPlanInput): SyncPlan {
 
   for (const link of input.links) {
     const desired = desiredByKey.get(link.key);
+    if (link.deleted_externally) {
+      // Tombstone: stays while the item is done or the deletion awaits a decision; "Keep it"
+      // (pushed_hash null) or reopening the item brings the event back. Nothing is left to delete.
+      const itemId = desired?.entry.itemId;
+      if (itemId && link.pushed_hash !== null && (done.has(itemId) || input.pending.get(itemId)?.deleted)) {
+        handledKeys.add(link.key);
+        continue;
+      }
+      plan.dropLinks.push(link);
+      if (desired && link.external_kind === input.kind) {
+        handledKeys.add(link.key);
+        plan.create.push(desired);
+      }
+      continue;
+    }
     const seen = input.observed.get(link.external_id);
 
     if (!desired || link.external_kind !== input.kind) {
@@ -341,7 +365,7 @@ export function planAppleSync(input: SyncPlanInput): SyncPlan {
     if (seen && !seen.found) {
       if (ours && itemId) {
         report({ itemId, key: link.key, newDate: null, newTime: null, deleted: true });
-        plan.dropLinks.push(link);
+        plan.tombstones.push(link);
       } else if (ours) {
         plan.unchanged.push(link);
       } else {
@@ -376,6 +400,7 @@ export function isPlanEmpty(plan: SyncPlan): boolean {
     plan.update.length === 0 &&
     plan.remove.length === 0 &&
     plan.dropLinks.length === 0 &&
+    plan.tombstones.length === 0 &&
     plan.externalChanges.length === 0
   );
 }

@@ -10,7 +10,7 @@ import { profileQueryOptions } from '@/data/profile';
 import { queryKeys } from '@/data/keys';
 import type { Profile } from '@/types/db';
 
-import { AppError, toAppError } from './functions';
+import { AppError, storeAppleToken, toAppError } from './functions';
 import { cancelTriageNotifications } from './notifications';
 import { queryClient } from './query-client';
 import { supabase } from './supabase';
@@ -240,6 +240,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         });
         if (error) throw authError(error, "Couldn't sign you in with Apple. Please try again.");
 
+        // Lets the server keep Apple's refresh token so deleting the account can revoke it
+        // (Apple's account-deletion rule). Best effort: it never blocks or fails sign-in.
+        const appleToken = credential.authorizationCode
+          ? storeAppleToken({ authorization_code: credential.authorizationCode }).catch(() => undefined)
+          : Promise.resolve(undefined);
+
         // Apple shares the name only on the very first authorization: keep it.
         const given = credential.fullName?.givenName ?? null;
         const family = credential.fullName?.familyName ?? null;
@@ -249,6 +255,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           await supabase.from('profiles').update({ display_name: fullName }).eq('id', data.user.id);
           await queryClient.invalidateQueries({ queryKey: queryKeys.profile(data.user.id) });
         }
+        await appleToken;
         return 'signedIn';
       },
       sendPasswordReset: async (email) => {

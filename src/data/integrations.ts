@@ -7,6 +7,7 @@ import type { CalendarOAuthStartRequest, CanvasRequest, LmsSyncRequest } from '@
 
 import {
   AppError,
+  calendarOAuthFinish,
   calendarOAuthStart,
   calendarSync,
   canvasConnect,
@@ -133,6 +134,15 @@ export function useCalendarOAuthStart() {
   return useMutation({ mutationFn: (request: CalendarOAuthStartRequest) => calendarOAuthStart(request) });
 }
 
+/** Creates the connection from the callback's one-time `pending` code (only for the account that started). */
+export function useCalendarOAuthFinish() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (pending: string) => calendarOAuthFinish({ pending }),
+    onSettled: () => client.invalidateQueries({ queryKey: queryKeys.calendarConnections() }),
+  });
+}
+
 /** Two-way sync; date edits made in Google/Outlook come back as items.external_change. */
 export function useCalendarSync() {
   const client = useQueryClient();
@@ -198,7 +208,10 @@ export function parseLmsStamp(value: string | null | undefined): LmsStamp | null
 export type DiscrepancyAction =
   /** Adopt the LMS due date (or lock time) on the linked item, then resolve. */
   | 'use_lms'
-  /** The syllabus is right: resolve without changing anything. */
+  /**
+   * The syllabus is right (or "Got it"): dismiss without changing anything. Syncs keep a dismissed
+   * row dismissed until its values change; a resolved one would reopen while the difference exists.
+   */
   | 'keep_syllabus'
   /** Add an LMS-only assignment to the plan as a new item, then resolve. */
   | 'add_item'
@@ -207,7 +220,7 @@ export type DiscrepancyAction =
 
 const NEXT_STATUS: Record<DiscrepancyAction, LmsDiscrepancy['status']> = {
   use_lms: 'resolved',
-  keep_syllabus: 'resolved',
+  keep_syllabus: 'dismissed',
   add_item: 'resolved',
   dismiss: 'dismissed',
   reopen: 'open',

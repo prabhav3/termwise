@@ -220,14 +220,14 @@ export default function FocusScreen() {
     return () => subscription.remove();
   }, []);
 
-  const blockStatus = task?.blockKey ? plan?.blocks.find((block) => block.key === task.blockKey)?.status : undefined;
+  const shownBlock = task?.blockKey ? plan?.blocks.find((block) => block.key === task.blockKey) : undefined;
+  const blockStatus = shownBlock?.status;
   const canMarkDone = blockStatus === 'planned';
 
   const markBlockDone = () => {
-    const key = task?.blockKey;
-    if (!key) return;
+    if (!shownBlock) return;
     markDone
-      .mutateAsync(key)
+      .mutateAsync(shownBlock)
       .then(() => {
         toast.show({ tone: 'success', title: 'Checked off', message: 'Nice work. Your plan is updated.' });
         leaveFocus();

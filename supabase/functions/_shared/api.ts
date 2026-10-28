@@ -37,10 +37,14 @@ export interface ParseSyllabusResponse {
 // ---------------------------------------------------------------------------
 // calendar-oauth-start  (auth: user)
 // calendar-oauth-callback  (auth: none, verify_jwt = false; provider redirects here)
-// The app opens auth_url with WebBrowser.openAuthSessionAsync(auth_url, return_url). After
-// consent, the callback stores encrypted tokens, creates the calendar_connections row, and
-// 302-redirects to `${return_url}?status=connected&provider=google` or
-// `${return_url}?status=error&provider=google&message=...`.
+// calendar-oauth-finish  (auth: user)
+// The app opens auth_url with WebBrowser.openAuthSessionAsync(auth_url, return_url). Start keeps
+// a one-time pending row (state nonce + PKCE verifier) for the caller. After consent, the callback
+// claims that row, exchanges the code, parks the encrypted tokens on it, and 302-redirects to
+// `${return_url}?status=authorized&provider=google&pending=<one-time code>` or
+// `${return_url}?status=error&provider=google&message=...`. The app then calls
+// calendar-oauth-finish with `pending`; only the account that started the flow can finish it,
+// and that call creates the calendar_connections row.
 // ---------------------------------------------------------------------------
 export type CloudCalendarProvider = 'google' | 'microsoft';
 export interface CalendarOAuthStartRequest {
@@ -50,6 +54,14 @@ export interface CalendarOAuthStartRequest {
 }
 export interface CalendarOAuthStartResponse {
   auth_url: string;
+}
+export interface CalendarOAuthFinishRequest {
+  /** The `pending` query parameter of the callback's redirect. */
+  pending: string;
+}
+export interface CalendarOAuthFinishResponse {
+  connection_id: string;
+  provider: CloudCalendarProvider;
 }
 
 // ---------------------------------------------------------------------------
@@ -195,9 +207,44 @@ export interface LmsSyncResponse {
 
 // ---------------------------------------------------------------------------
 // account  (auth: user)
-// POST { action: 'delete' } -> deletes the caller's storage files and auth user (cascades).
-// Required by App Store guideline 5.1.1(v).
+// POST { action: 'delete' } -> deletes the caller's storage files, revokes their Sign in with
+// Apple tokens (Apple's /auth/revoke), then deletes the auth user (cascades). Required by App
+// Store guideline 5.1.1(v). Deletion never fails because of Apple: the outcome is reported in
+// `apple_revocation` instead.
 // ---------------------------------------------------------------------------
 export interface AccountRequest {
   action: 'delete';
+  /**
+   * A fresh Sign in with Apple authorizationCode, for accounts with no stored Apple token (the
+   * app re-authorizes with Apple when a previous delete answered `apple_revocation: 'no_token'`).
+   */
+  apple_authorization_code?: string;
+}
+export type AppleRevocationOutcome =
+  /** Apple's refresh token was revoked. */
+  | 'revoked'
+  /** The account never used Sign in with Apple. */
+  | 'not_linked'
+  /** The server has no Apple key configured (APPLE_TEAM_ID / APPLE_KEY_ID / APPLE_PRIVATE_KEY). */
+  | 'skipped'
+  /** Apple sign-in account, but no stored token and no authorization code was sent. */
+  | 'no_token'
+  /** Apple rejected the request or could not be reached. */
+  | 'failed';
+export interface AccountDeleteResponse extends OkResponse {
+  apple_revocation: AppleRevocationOutcome;
+}
+
+// ---------------------------------------------------------------------------
+// apple-token  (auth: user)
+// POST { authorization_code } right after Sign in with Apple. Exchanges the code at Apple's
+// /auth/token and keeps the refresh token (encrypted, service role only) so account deletion
+// can revoke it. `stored: false` when the server has no Apple key configured or Apple returned
+// no refresh token; sign-in never depends on this call.
+// ---------------------------------------------------------------------------
+export interface AppleTokenRequest {
+  authorization_code: string;
+}
+export interface AppleTokenResponse {
+  stored: boolean;
 }

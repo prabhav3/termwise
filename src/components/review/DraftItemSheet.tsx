@@ -200,10 +200,12 @@ function DraftItemForm({ item, componentNames, textbookTitles, onChange, onDelet
         ) : (
           <Button label="Add reading details" size="sm" variant="ghost" onPress={() => set({ reading: EMPTY_READING })} />
         )}
+        {/* items.description: share links include it, so it is not labelled as private notes. */}
         <TextField
-          label="Notes"
+          label="Details"
           value={item.description ?? ''}
           multiline
+          placeholder="What the assignment asks for"
           onChangeText={(description) => set({ description: description || null })}
         />
       </ScrollView>

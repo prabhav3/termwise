@@ -162,6 +162,176 @@ await asUser(db, U1, async () => {
   );
 });
 
+// --- 20261028000000_security_fixes.sql ---------------------------------------------
+async function anonSharedTimeline(s) {
+  await db.exec(`set role anon;`);
+  try {
+    return (await db.query(`select public.get_shared_timeline($1) as t`, [s])).rows[0].t;
+  } finally {
+    await db.exec(`reset role;`);
+  }
+}
+
+await asUser(db, U2, async () => {
+  await expectError(db.query('select * from public.calendar_oauth_pending'), 'calendar_oauth_pending not readable by authenticated');
+  await expectError(
+    db.query(
+      `insert into public.calendar_oauth_pending (nonce, user_id, provider, code_verifier, expires_at)
+       values ('n', '${U2}', 'google', 'v', now() + interval '5 minutes')`,
+    ),
+    'calendar_oauth_pending not writable by authenticated',
+  );
+  await expectError(db.query('select * from public.apple_secrets'), 'apple_secrets not readable by authenticated');
+  await expectError(
+    db.query(`insert into public.apple_secrets (user_id, refresh_token_enc) values ('${U2}', 'x')`),
+    'apple_secrets not writable by authenticated',
+  );
+});
+
+// Share rows: owners may only flip `revoked`; course_id / slug / snapshot / import_count stay server-managed.
+const unsharedCourseId = await asUser(db, U1, async () =>
+  (await db.query(`insert into public.courses (title) values ('Not shared yet') returning id`)).rows[0].id,
+);
+const benShare = await asUser(db, U2, async () => {
+  const c = await db.query(`insert into public.courses (title) values ('Ben course') returning id`);
+  const s = await db.query(`select id, slug from public.create_share_link($1)`, [c.rows[0].id]);
+  return s.rows[0];
+});
+await asUser(db, U2, async () => {
+  await expectError(
+    db.query(`update public.shared_timelines set course_id = $1 where id = $2`, [unsharedCourseId, benShare.id]),
+    'owners cannot repoint their share row at another user’s course',
+  );
+  await expectError(
+    db.query(`update public.shared_timelines set snapshot = '{}'::jsonb where id = $1`, [benShare.id]),
+    'owners cannot rewrite a share snapshot directly',
+  );
+  await expectError(db.query(`update public.shared_timelines set slug = 'chosen' where id = $1`, [benShare.id]), 'owners cannot pick a slug');
+  await expectError(
+    db.query(`update public.shared_timelines set import_count = 999 where id = $1`, [benShare.id]),
+    'owners cannot edit import_count',
+  );
+});
+const victimShare = await asUser(db, U1, () =>
+  db.query(`select owner_id, slug from public.create_share_link($1)`, [unsharedCourseId]),
+);
+victimShare.rows[0].owner_id === U1 && victimShare.rows[0].slug !== benShare.slug
+  ? ok('a course owner’s new share link is their own row')
+  : fail(`victim share returned ${JSON.stringify(victimShare.rows[0])}`);
+const reshared = await asUser(db, U1, () => db.query(`select slug, owner_id from public.create_share_link($1)`, [courseId]));
+reshared.rows[0].slug === slug && reshared.rows[0].owner_id === U1
+  ? ok('sharing again while shared keeps the same slug and owner')
+  : fail(`re-share without revoke returned ${JSON.stringify(reshared.rows[0])}`);
+
+// A legacy row whose owner doesn't own the course is never updated by create_share_link.
+await db.query(`update public.shared_timelines set owner_id = $1 where course_id = $2`, [U2, courseId]);
+await asUser(db, U1, () =>
+  expectError(db.query(`select public.create_share_link($1)`, [courseId]), 'create_share_link refuses a share row owned by someone else'),
+);
+await db.query(`update public.shared_timelines set owner_id = $1 where course_id = $2`, [U1, courseId]);
+
+// Stop sharing, then share again: the old slug stays dead.
+const stopped = await asUser(db, U1, () =>
+  db.query(`update public.shared_timelines set revoked = true where slug = $1 returning id`, [slug]),
+);
+stopped.rows.length === 1 ? ok('owner can stop sharing (update revoked)') : fail('owner could not revoke their share');
+(await anonSharedTimeline(slug)) === null ? ok('revoked slug no longer resolves') : fail('revoked slug still resolves');
+const fresh = await asUser(db, U1, () => db.query(`select slug from public.create_share_link($1)`, [courseId]));
+const freshSlug = fresh.rows[0].slug;
+freshSlug && freshSlug !== slug && /^[0-9a-f]{12}$/.test(freshSlug)
+  ? ok('sharing again after revoking issues a new slug')
+  : fail(`re-share after revoke returned slug ${freshSlug} (old ${slug})`);
+(await anonSharedTimeline(slug)) === null
+  ? ok('old slug stays dead after sharing again')
+  : fail('old revoked slug came back after sharing again');
+(await anonSharedTimeline(freshSlug))?.snapshot ? ok('new slug resolves') : fail('new slug does not resolve');
+
+// import_shared_timeline rebuilds JSON from type-checked keys.
+const poisoned = await asUser(db, U1, async () => {
+  const c = await db.query(
+    `insert into public.courses (title, grade_scale, policies) values ('Poisoned', '"oops"', '[1]') returning id`,
+  );
+  const cid = c.rows[0].id;
+  const tb = await db.query(
+    `insert into public.textbooks (course_id, title, chapters) values
+       ($1, 'Good book', '[{"number":"4","title":"Memory","start_page":101,"end_page":"134"},{"title":"no number"},3,{"number":5}]'),
+       ($1, 'Bad book', '{"x":1}')
+     returning id, title`,
+    [cid],
+  );
+  const goodBook = tb.rows.find((r) => r.title === 'Good book').id;
+  await db.query(
+    `insert into public.items (course_id, title, kind, reading) values
+       ($1, 'Empty reading', 'reading', '{}'),
+       ($1, 'Mixed reading', 'reading', $2),
+       ($1, 'String reading', 'reading', '"str"')`,
+    [
+      cid,
+      JSON.stringify({
+        textbook_id: goodBook,
+        chapters: ['4', 5, { x: 1 }, null],
+        page_ranges: [{ start: 1, end: 10 }, 'bad', { start: '1', end: 2 }, null],
+        explicit_pages: '12',
+        description: 7,
+      }),
+    ],
+  );
+  const s = await db.query(`select slug from public.create_share_link($1)`, [cid]);
+  return s.rows[0].slug;
+});
+const cleaned = await asUser(db, U2, async () => {
+  const r = await db.query(`select public.import_shared_timeline($1) as id`, [poisoned]);
+  const cid = r.rows[0].id;
+  const course = await db.query(`select grade_scale, policies from public.courses where id = $1`, [cid]);
+  const books = await db.query(`select id, title, chapters from public.textbooks where course_id = $1 order by title`, [cid]);
+  const items = await db.query(`select title, reading from public.items where course_id = $1 order by title`, [cid]);
+  return { course: course.rows[0], books: books.rows, items: Object.fromEntries(items.rows.map((i) => [i.title, i.reading])) };
+});
+const goodBookCopy = cleaned.books.find((b) => b.title === 'Good book');
+const badBookCopy = cleaned.books.find((b) => b.title === 'Bad book');
+JSON.stringify(cleaned.items['Empty reading']) ===
+JSON.stringify({ chapters: [], description: null, page_ranges: [], textbook_id: null, explicit_pages: null })
+  ? ok('import gives a malformed reading every field with the right type')
+  : fail(`imported empty reading: ${JSON.stringify(cleaned.items['Empty reading'])}`);
+const mixed = cleaned.items['Mixed reading'];
+mixed?.textbook_id === goodBookCopy?.id &&
+JSON.stringify(mixed.chapters) === '["4","5"]' &&
+JSON.stringify(mixed.page_ranges) === '[{"end":10,"start":1}]' &&
+mixed.explicit_pages === null &&
+mixed.description === null
+  ? ok('import keeps well-typed reading fields, remaps the textbook, and drops the rest')
+  : fail(`imported mixed reading: ${JSON.stringify(mixed)}`);
+cleaned.items['String reading'] === null ? ok('import drops a non-object reading') : fail('non-object reading was imported');
+JSON.stringify(badBookCopy?.chapters) === '[]' &&
+JSON.stringify(goodBookCopy?.chapters) ===
+  '[{"title":"Memory","number":"4","end_page":null,"start_page":101},{"title":null,"number":"5","end_page":null,"start_page":null}]'
+  ? ok('import keeps only well-formed textbook chapters')
+  : fail(`imported chapters: ${JSON.stringify(cleaned.books.map((b) => b.chapters))}`);
+Array.isArray(cleaned.course.grade_scale) && cleaned.course.grade_scale.length === 12 && cleaned.course.grade_scale[0].letter === 'A'
+  ? ok('import falls back to the default grade scale for a malformed one')
+  : fail(`imported grade_scale: ${JSON.stringify(cleaned.course.grade_scale)}`);
+JSON.stringify(cleaned.course.policies) === '{}' ? ok('import replaces non-object policies with {}') : fail(`imported policies: ${JSON.stringify(cleaned.course.policies)}`);
+
+// A snapshot edited outside create_share_link (e.g. before the column lock) is sanitized too.
+await db.query(
+  `update public.shared_timelines
+      set snapshot = jsonb_set(jsonb_set(snapshot, '{course,grade_scale}', $2::jsonb), '{course,policies}', $3::jsonb)
+    where slug = $1`,
+  [
+    poisoned,
+    JSON.stringify([{ letter: 'A', min: 'x' }, { letter: 'B', min: 80 }, 'C']),
+    JSON.stringify({ late_policy: 5, unannounced_quizzes: true, drop_policy: 'Lowest quiz', extra: 'x' }),
+  ],
+);
+const tampered = await asUser(db, U2, async () => {
+  const r = await db.query(`select public.import_shared_timeline($1) as id`, [poisoned]);
+  return (await db.query(`select grade_scale, policies from public.courses where id = $1`, [r.rows[0].id])).rows[0];
+});
+JSON.stringify(tampered.grade_scale) === '[{"min":80,"letter":"B"}]' &&
+JSON.stringify(tampered.policies) === '{"drop_policy":"Lowest quiz","unannounced_quizzes":true}'
+  ? ok('import keeps only well-typed grade-scale entries and known policy keys')
+  : fail(`imported tampered course: ${JSON.stringify(tampered)}`);
+
 await db.close();
 if (process.exitCode) {
   console.error('\nDatabase checks FAILED');

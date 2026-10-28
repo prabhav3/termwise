@@ -66,21 +66,22 @@ export function TodayBody({ snapshot }: TodayBodyProps) {
       return next;
     });
 
-  const completeBlock = (key: string) => {
-    setPendingKey(key, 'done');
+  // Both pass the block as shown: the planner checks it is the stored work before changing it.
+  const completeBlock = (block: EngineBlock) => {
+    setPendingKey(block.key, 'done');
     markDone
-      .mutateAsync(key)
+      .mutateAsync(block)
       .then(() => haptic('success'))
       .catch((error: unknown) =>
         toast.show({ tone: 'danger', title: "Couldn't check that off", message: errorMessage(error) }),
       )
-      .finally(() => setPendingKey(key, null));
+      .finally(() => setPendingKey(block.key, null));
   };
 
   const missBlock = (block: EngineBlock) => {
     setPendingKey(block.key, 'missed');
     markMissed
-      .mutateAsync(block.key)
+      .mutateAsync(block)
       .then(({ summary }) => toast.show({ tone: 'info', title: 'Rescheduled', message: summary, duration: 5000 }))
       .catch((error: unknown) =>
         toast.show({ tone: 'danger', title: "Couldn't move that block", message: errorMessage(error) }),
@@ -145,9 +146,9 @@ export function TodayBody({ snapshot }: TodayBodyProps) {
           />
           {triage.map((action, index) => {
             const blockKey = action.block_key;
+            const block = blockKey !== null ? plan.blocks.find((b) => b.key === blockKey) : undefined;
             const done =
-              doneItems.has(action.item_id) ||
-              (blockKey !== null && (pending.get(blockKey) ?? plan.blocks.find((b) => b.key === blockKey)?.status) === 'done');
+              doneItems.has(action.item_id) || (blockKey !== null && (pending.get(blockKey) ?? block?.status) === 'done');
             const canDoneItem = blockKey === null && itemDoneAllowed(action);
             return (
               <TriageCard
@@ -166,7 +167,7 @@ export function TodayBody({ snapshot }: TodayBodyProps) {
                       ? () => openFocus({ itemId: action.item_id, minutes: action.minutes })
                       : undefined
                 }
-                onDone={blockKey ? () => completeBlock(blockKey) : canDoneItem ? () => completeItem(action) : undefined}
+                onDone={block ? () => completeBlock(block) : canDoneItem ? () => completeItem(action) : undefined}
               />
             );
           })}
@@ -188,7 +189,7 @@ export function TodayBody({ snapshot }: TodayBodyProps) {
             blocks={blocks}
             courses={courseById}
             pending={pending}
-            onDone={(block) => completeBlock(block.key)}
+            onDone={completeBlock}
             onMissed={missBlock}
             onFocus={(block) => openFocus({ blockKey: block.key })}
             onOpenItem={(block) => openItem(block.item_id)}

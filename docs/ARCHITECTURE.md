@@ -90,18 +90,23 @@ termwise/
 | Function | Auth | Purpose |
 |---|---|---|
 | `parse-syllabus` | user | AI extraction job (Claude) |
-| `calendar-oauth-start` | user | Build Google/Microsoft consent URL with signed state |
-| `calendar-oauth-callback` | none (verify_jwt off) | Exchange code, store encrypted tokens, redirect to app |
+| `calendar-oauth-start` | user | Build Google/Microsoft consent URL (signed state + PKCE); store a one-time pending row |
+| `calendar-oauth-callback` | none (verify_jwt off) | Claim the pending row once, exchange the code (PKCE), park encrypted tokens, redirect to app with a one-time `pending` code |
+| `calendar-oauth-finish` | user | Turn the `pending` code into the connection — only for the account that started the flow |
 | `calendar-sync` | user | Two-way Google Calendar/Tasks + Microsoft Graph Calendar/To Do sync |
 | `ics-feed` | none (token in URL) | Read-only iCal subscription feed |
 | `canvas` | user | Canvas connect / list / import / sync / fetch_syllabus / disconnect |
 | `lms-sync` | user | iCal feeds from Blackboard / Moodle / any LMS → discrepancies |
 | `share-preview` | none | HTML preview for share links |
-| `account` | user | Delete account (storage + auth user) |
+| `account` | user | Delete account (storage, Sign in with Apple token revocation, auth user) |
+| `apple-token` | user | After Sign in with Apple: exchange the authorizationCode, keep the encrypted refresh token for revocation |
 
 Request/response types: `supabase/functions/_shared/api.ts`. Secrets: `ANTHROPIC_API_KEY`, `TOKEN_ENCRYPTION_KEY`
 (32-byte base64), `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`,
-`OAUTH_STATE_SECRET`, optional `PARSE_MODEL` (default `claude-opus-5-5`) and `PARSE_EFFORT` (default `medium`).
+`OAUTH_STATE_SECRET`, `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY` (the `.p8` key; Sign in with Apple token
+revocation is skipped without them), optional `APPLE_CLIENT_ID` (default: the bundle id), `PARSE_MODEL` (default
+`claude-opus-5-5`) and `PARSE_EFFORT` (default `medium`). Development only: `ALLOW_EXPO_GO_RETURN=1` lets the calendar
+OAuth flow return to `exp://` (Expo Go) links — never set it on the production project.
 
 ## App routes (src/app)
 

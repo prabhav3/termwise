@@ -1,21 +1,43 @@
 // calendar-oauth-callback (auth: none, verify_jwt = false) — Google / Microsoft redirect here
-// with ?code&state (or ?error&state). Verifies the signed state, exchanges the code, reads the
-// account email, stores the connection (device_id '') and the encrypted tokens with the service
-// role, then 302-redirects to the app's return_url with status=connected|error, provider, and a
-// student-safe message on errors. A request whose state can't be verified gets a plain page:
-// its return_url is untrusted, so it is never redirected to.
+// with ?code&state (or ?error&state). Verifies the signed state, then claims the one-time pending
+// row calendar-oauth-start stored for its nonce (unknown, used, or expired → refused, so a state
+// can't be replayed). Exchanges the code with that row's PKCE verifier, reads the account email,
+// and parks the encrypted tokens on the pending row — it never creates a connection itself. It
+// 302-redirects to the app's return_url with status=authorized, provider, and a one-time
+// `pending` code; the app hands that to calendar-oauth-finish, which attaches the calendar only
+// to the Termwise account that started the flow. Errors redirect with status=error and a
+// student-safe message. A request whose state can't be verified gets a plain page: its
+// return_url is untrusted, so it is never redirected to.
 import { type SupabaseContext, withSupabase } from '@supabase/server';
 import type { CloudCalendarProvider } from '../_shared/api.ts';
-import { ProviderError, ReauthRequiredError } from '../_shared/calendar-model.ts';
-import { exchangeGoogleCode, fetchGoogleEmail, googleScopesSufficient, type OAuthTokenResponse } from '../_shared/google.ts';
+import { oauthTokenRequest, ProviderError, ReauthRequiredError } from '../_shared/calendar-model.ts';
+import { fetchGoogleEmail, googleScopesSufficient, type OAuthTokenResponse } from '../_shared/google.ts';
 import { HttpError, requireEnv } from '../_shared/http.ts';
-import { exchangeMicrosoftCode, fetchMicrosoftEmail } from '../_shared/microsoft.ts';
-import { appendQuery, type OAuthState, OAuthStateError, oauthRedirectUri, verifyOAuthState } from '../_shared/oauth-state.ts';
+import { fetchMicrosoftEmail, MICROSOFT_SCOPES } from '../_shared/microsoft.ts';
+import {
+  appendQuery,
+  createFinishCode,
+  hashFinishCode,
+  OAUTH_FINISH_TTL_SECONDS,
+  type OAuthState,
+  OAuthStateError,
+  oauthRedirectUri,
+  type ReturnUrlPolicy,
+  verifyOAuthState,
+} from '../_shared/oauth-state.ts';
 import { sealSecret } from '../_shared/secrets.ts';
 
 type Db = SupabaseContext['supabaseAdmin'];
 
 const PROVIDER_NAMES: Record<CloudCalendarProvider, string> = { google: 'Google', microsoft: 'Microsoft' };
+
+/** Same policy as calendar-oauth-start: exp:// return URLs only with ALLOW_EXPO_GO_RETURN=1. */
+const RETURN_URL_POLICY: ReturnUrlPolicy = { allowExpoGo: Deno.env.get('ALLOW_EXPO_GO_RETURN') === '1' };
+
+const TOKEN_URLS: Record<CloudCalendarProvider, string> = {
+  google: 'https://oauth2.googleapis.com/token',
+  microsoft: 'https://login.microsoftonline.com/common/oauth2/v2.0/token',
+};
 
 /** A failure whose message is safe to show the student in the app. */
 class CallbackError extends Error {}
@@ -31,98 +53,98 @@ function plainPage(status: number, message: string): Response {
 function redirect(state: OAuthState, params: Record<string, string>): Response {
   return new Response(null, {
     status: 302,
-    headers: { Location: appendQuery(state.return_url, { provider: state.provider, ...params }), 'Cache-Control': 'no-store' },
+    headers: {
+      Location: appendQuery(state.return_url, { provider: state.provider, ...params }),
+      'Cache-Control': 'no-store',
+      'Referrer-Policy': 'no-referrer',
+    },
   });
 }
 
-async function exchange(provider: CloudCalendarProvider, code: string, redirectUri: string): Promise<{ tokens: OAuthTokenResponse; email: string | null }> {
+/**
+ * Marks the pending row for this state used and returns its PKCE verifier, or null when there is
+ * no unused, unexpired row issued for the same account and provider. One UPDATE, so two
+ * concurrent redirects with the same state can't both claim it.
+ */
+async function claimPending(db: Db, state: OAuthState): Promise<string | null> {
+  const now = new Date().toISOString();
+  const { data, error } = await db
+    .from('calendar_oauth_pending')
+    .update({ used_at: now })
+    .eq('nonce', state.nonce)
+    .eq('user_id', state.uid)
+    .eq('provider', state.provider)
+    .is('used_at', null)
+    .gt('expires_at', now)
+    .select('code_verifier')
+    .maybeSingle()
+    .overrideTypes<{ code_verifier: string }, { merge: false }>();
+  if (error) throw error;
+  return data?.code_verifier ?? null;
+}
+
+async function discardPending(db: Db, nonce: string): Promise<void> {
+  const { error } = await db.from('calendar_oauth_pending').delete().eq('nonce', nonce);
+  if (error) console.error(`calendar-oauth-callback: pending cleanup failed (${error.code})`);
+}
+
+/** Authorization code -> tokens, proving possession of the PKCE verifier. */
+function exchangeCode(provider: CloudCalendarProvider, code: string, redirectUri: string, codeVerifier: string): Promise<OAuthTokenResponse> {
+  const params: Record<string, string> = {
+    grant_type: 'authorization_code',
+    code,
+    redirect_uri: redirectUri,
+    code_verifier: codeVerifier,
+  };
   if (provider === 'google') {
-    const tokens = await exchangeGoogleCode(
-      { clientId: requireEnv('GOOGLE_CLIENT_ID'), clientSecret: requireEnv('GOOGLE_CLIENT_SECRET') },
-      code,
-      redirectUri,
-    );
+    params.client_id = requireEnv('GOOGLE_CLIENT_ID');
+    params.client_secret = requireEnv('GOOGLE_CLIENT_SECRET');
+  } else {
+    params.client_id = requireEnv('MICROSOFT_CLIENT_ID');
+    params.client_secret = requireEnv('MICROSOFT_CLIENT_SECRET');
+    params.scope = MICROSOFT_SCOPES.join(' ');
+  }
+  return oauthTokenRequest<OAuthTokenResponse>(provider, TOKEN_URLS[provider], params);
+}
+
+async function exchange(
+  provider: CloudCalendarProvider,
+  code: string,
+  redirectUri: string,
+  codeVerifier: string,
+): Promise<{ tokens: OAuthTokenResponse; email: string | null }> {
+  const tokens = await exchangeCode(provider, code, redirectUri, codeVerifier);
+  if (provider === 'google') {
     if (!googleScopesSufficient(tokens.scope)) {
       throw new CallbackError('Termwise needs access to Google Calendar and Google Tasks. Connect again and keep both boxes checked.');
     }
     return { tokens, email: await fetchGoogleEmail(tokens.access_token).catch(() => null) };
   }
-  const tokens = await exchangeMicrosoftCode(
-    { clientId: requireEnv('MICROSOFT_CLIENT_ID'), clientSecret: requireEnv('MICROSOFT_CLIENT_SECRET') },
-    code,
-    redirectUri,
-  );
   return { tokens, email: await fetchMicrosoftEmail(tokens.access_token).catch(() => null) };
 }
 
-async function store(db: Db, state: OAuthState, tokens: OAuthTokenResponse, email: string | null): Promise<void> {
-  const { data: existing, error: lookupError } = await db
-    .from('calendar_connections')
-    .select('id, account_email')
-    .eq('user_id', state.uid)
-    .eq('provider', state.provider)
-    .eq('device_id', '')
-    .maybeSingle()
-    .overrideTypes<{ id: string; account_email: string | null }, { merge: false }>();
-  if (lookupError) throw lookupError;
-
-  // A different account means a different calendar: forget everything tied to the old one.
-  const switchedAccount = existing !== null && email !== null && existing.account_email !== null && existing.account_email !== email;
-  // Without a refresh token (new or stored) the connection would die within the hour.
-  let hasRefreshToken = Boolean(tokens.refresh_token);
-  if (!hasRefreshToken && existing && !switchedAccount) {
-    const { data: secret } = await db
-      .from('calendar_secrets')
-      .select('refresh_token_enc')
-      .eq('connection_id', existing.id)
-      .maybeSingle()
-      .overrideTypes<{ refresh_token_enc: string | null }, { merge: false }>();
-    hasRefreshToken = Boolean(secret?.refresh_token_enc);
-  }
-  if (!hasRefreshToken) {
-    throw new CallbackError(
-      `${PROVIDER_NAMES[state.provider]} didn't allow offline access. Remove Termwise from your account's connected apps, then connect again.`,
-    );
-  }
-
-  const { data: connection, error } = await db
-    .from('calendar_connections')
-    .upsert(
-      {
-        user_id: state.uid,
-        provider: state.provider,
-        device_id: '',
-        account_email: email ?? existing?.account_email ?? null,
-        status: 'active',
-        last_error: null,
-        ...(switchedAccount ? { external_calendar_id: null, task_list_id: null, sync_cursor: null } : {}),
-      },
-      { onConflict: 'user_id,provider,device_id' },
-    )
-    .select('id')
-    .single()
-    .overrideTypes<{ id: string }, { merge: false }>();
-  if (error || !connection) throw error ?? new Error('connection upsert returned no row');
-  if (switchedAccount) {
-    const { error: linkError } = await db.from('calendar_event_links').delete().eq('connection_id', connection.id);
-    if (linkError) throw linkError;
-  }
-
+/** Parks the sealed tokens on the claimed row; returns the one-time code for the app. */
+async function park(db: Db, state: OAuthState, tokens: OAuthTokenResponse, email: string | null): Promise<string> {
+  const finishCode = createFinishCode();
   const expiresIn = Number.isFinite(tokens.expires_in) && tokens.expires_in > 0 ? tokens.expires_in : 3600;
-  const { error: secretError } = await db.from('calendar_secrets').upsert(
-    {
-      connection_id: connection.id,
-      user_id: state.uid,
+  const { data, error } = await db
+    .from('calendar_oauth_pending')
+    .update({
+      finish_code_hash: await hashFinishCode(finishCode),
+      account_email: email,
       access_token_enc: await sealSecret(tokens.access_token),
+      refresh_token_enc: tokens.refresh_token ? await sealSecret(tokens.refresh_token) : null,
       access_token_expires_at: new Date(Date.now() + expiresIn * 1000).toISOString(),
       scope: tokens.scope ?? null,
-      updated_at: new Date().toISOString(),
-      // Keep the stored refresh token when the provider didn't send a new one.
-      ...(tokens.refresh_token ? { refresh_token_enc: await sealSecret(tokens.refresh_token) } : {}),
-    },
-    { onConflict: 'connection_id' },
-  );
-  if (secretError) throw secretError;
+      expires_at: new Date(Date.now() + OAUTH_FINISH_TTL_SECONDS * 1000).toISOString(),
+    })
+    .eq('nonce', state.nonce)
+    .select('nonce')
+    .maybeSingle()
+    .overrideTypes<{ nonce: string }, { merge: false }>();
+  if (error) throw error;
+  if (!data) throw new CallbackError('This sign-in took too long to finish. Please connect again.');
+  return finishCode;
 }
 
 function failureMessage(err: unknown, provider: CloudCalendarProvider): string {
@@ -142,7 +164,7 @@ async function callback(req: Request, ctx: SupabaseContext): Promise<Response> {
 
   let state: OAuthState;
   try {
-    state = await verifyOAuthState(rawState, requireEnv('OAUTH_STATE_SECRET'));
+    state = await verifyOAuthState(rawState, requireEnv('OAUTH_STATE_SECRET'), Date.now(), RETURN_URL_POLICY);
   } catch (err) {
     if (err instanceof OAuthStateError) {
       const message =
@@ -155,8 +177,21 @@ async function callback(req: Request, ctx: SupabaseContext): Promise<Response> {
     return plainPage(500, 'Calendar sign-in is not available right now.');
   }
 
+  let codeVerifier: string | null;
+  try {
+    codeVerifier = await claimPending(ctx.supabaseAdmin, state);
+  } catch (err) {
+    const detail = typeof err === 'object' && err !== null && 'code' in err ? String(err.code) : 'unknown';
+    console.error(`calendar-oauth-callback: pending lookup failed (${detail})`);
+    return redirect(state, { status: 'error', message: "We couldn't finish connecting your calendar. Please try again." });
+  }
+  if (!codeVerifier) {
+    return redirect(state, { status: 'error', message: 'This sign-in link was already used or has expired. Please connect again.' });
+  }
+
   const providerError = params.get('error');
   if (providerError) {
+    await discardPending(ctx.supabaseAdmin, state.nonce);
     const cancelled = providerError === 'access_denied' || providerError === 'consent_required';
     return redirect(state, {
       status: 'error',
@@ -164,17 +199,21 @@ async function callback(req: Request, ctx: SupabaseContext): Promise<Response> {
     });
   }
   const code = params.get('code');
-  if (!code) return redirect(state, { status: 'error', message: 'The sign-in response was incomplete. Please try again.' });
+  if (!code) {
+    await discardPending(ctx.supabaseAdmin, state.nonce);
+    return redirect(state, { status: 'error', message: 'The sign-in response was incomplete. Please try again.' });
+  }
 
   try {
-    const { tokens, email } = await exchange(state.provider, code, oauthRedirectUri(requireEnv('SUPABASE_URL')));
-    await store(ctx.supabaseAdmin, state, tokens, email);
-    return redirect(state, { status: 'connected' });
+    const { tokens, email } = await exchange(state.provider, code, oauthRedirectUri(requireEnv('SUPABASE_URL')), codeVerifier);
+    const finishCode = await park(ctx.supabaseAdmin, state, tokens, email);
+    return redirect(state, { status: 'authorized', pending: finishCode });
   } catch (err) {
     if (!(err instanceof CallbackError)) {
       const detail = err instanceof Error ? err.name : typeof err === 'object' && err !== null && 'code' in err ? String(err.code) : 'unknown';
       console.error(`calendar-oauth-callback: ${state.provider} connection failed (${detail})`);
     }
+    await discardPending(ctx.supabaseAdmin, state.nonce);
     return redirect(state, { status: 'error', message: failureMessage(err, state.provider) });
   }
 }

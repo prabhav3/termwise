@@ -28,6 +28,11 @@ export interface TocReviewProps {
   /** The textbook the scan was started from (textbook screen → Scan table of contents). */
   initialTextbookId: string | null;
   onSaved: (textbookId: string) => void;
+  /**
+   * true when a save starts, false when it fails. The save marks the upload imported before it
+   * settles, so the screen keeps this review mounted meanwhile (its callbacks need it).
+   */
+  onImportingChange: (importing: boolean) => void;
   onDiscard: () => void;
   discarding: boolean;
 }
@@ -39,7 +44,7 @@ function guessBook(books: readonly Textbook[], initialId: string | null, title: 
   return match?.id ?? NEW_BOOK;
 }
 
-export function TocReview({ upload, extraction, initialTextbookId, onSaved, onDiscard, discarding }: TocReviewProps) {
+export function TocReview({ upload, extraction, initialTextbookId, onSaved, onImportingChange, onDiscard, discarding }: TocReviewProps) {
   const { spacing } = useTheme();
   const toast = useToast();
   const courses = useCourses();
@@ -71,6 +76,7 @@ export function TocReview({ upload, extraction, initialTextbookId, onSaved, onDi
   const submit = () => {
     setSubmitted(true);
     if (problems.length > 0 || !course) return;
+    onImportingChange(true);
     save.mutate(
       {
         upload,
@@ -88,6 +94,7 @@ export function TocReview({ upload, extraction, initialTextbookId, onSaved, onDi
           });
           onSaved(textbookId);
         },
+        onError: () => onImportingChange(false),
       },
     );
   };

@@ -394,6 +394,8 @@ export interface LinkState {
   external_kind: ExternalKind;
   pushed_hash: string | null;
   pushed_date: ISODate | null;
+  /** Tombstone: the student deleted this item's entry externally (see planCalendarSync). */
+  deleted_externally: boolean;
 }
 
 /** What the provider reports about one external event / task. */
@@ -441,6 +443,8 @@ export interface SyncPlan {
   remove: LinkState[];
   /** The external object is already gone: delete only the link row. */
   dropLinks: LinkState[];
+  /** An item's entry the student deleted externally: keep its link row, flagged deleted_externally. */
+  tombstones: LinkState[];
   /** External objects of ours that no link knows about and nothing wants: delete them. */
   removeOrphans: string[];
   externalChanges: DetectedChange[];
@@ -456,6 +460,8 @@ export interface PlanInput {
   snapshot: ExternalSnapshot | null;
   /** Current items.external_change per item id (from this provider), to avoid re-reporting. */
   pendingChanges: Map<string, PendingChange>;
+  /** Items with status 'done': an entry the student deleted externally stays deleted. */
+  doneItems?: ReadonlySet<string>;
 }
 
 function samePending(existing: PendingChange | undefined, change: DetectedChange): boolean {
@@ -477,10 +483,14 @@ export function planCalendarSync(input: PlanInput): SyncPlan {
     update: [],
     remove: [],
     dropLinks: [],
+    tombstones: [],
     removeOrphans: [],
     externalChanges: [],
     unchanged: [],
   };
+  const done = input.doneItems ?? new Set<string>();
+  /** Keys of item entries the student deleted externally and still wants gone. */
+  const keptDeleted = new Set<string>();
   const desiredByKey = new Map(input.desired.map((d) => [d.entry.key, d]));
   const linkByKey = new Map(input.links.map((l) => [l.key, l]));
   const observations = new Map((input.snapshot?.observations ?? []).map((o) => [o.externalId, o]));
@@ -509,6 +519,19 @@ export function planCalendarSync(input: PlanInput): SyncPlan {
 
   for (const link of input.links) {
     const desired = desiredByKey.get(link.key);
+    if (link.deleted_externally) {
+      // Tombstone: the student deleted this item's entry here. It stays deleted while the item is
+      // done or the deletion awaits a decision; "Keep it" (pushed_hash cleared) or reopening the
+      // item brings it back. Its external object is gone, so only the row is ever deleted.
+      const itemId = desired?.entry.itemId;
+      if (itemId && link.pushed_hash !== null && (done.has(itemId) || input.pendingChanges.get(itemId)?.deleted)) {
+        keptDeleted.add(link.key);
+        continue;
+      }
+      plan.dropLinks.push(link);
+      if (desired && link.external_kind === input.kind) plan.create.push(desired);
+      continue;
+    }
     if (!desired || link.external_kind !== input.kind) {
       // The snapshot only covers the current kind's container, so it says nothing about the other.
       if (link.external_kind === input.kind && observe(link.external_id) === 'gone') plan.dropLinks.push(link);
@@ -522,7 +545,7 @@ export function planCalendarSync(input: PlanInput): SyncPlan {
     if (seen === 'gone') {
       if (ours && itemId) {
         report({ itemId, key: link.key, newDate: null, newTime: null, deleted: true });
-        plan.dropLinks.push(link);
+        plan.tombstones.push(link);
       } else if (ours) {
         // A plan block the student deleted stays deleted until the block itself changes.
         plan.unchanged.push(link);
@@ -543,9 +566,11 @@ export function planCalendarSync(input: PlanInput): SyncPlan {
   }
 
   for (const desired of input.desired) {
+    if (keptDeleted.has(desired.entry.key)) continue;
     if (linkByKey.has(desired.entry.key) && linkByKey.get(desired.entry.key)?.external_kind === input.kind) continue;
     const itemId = desired.entry.itemId;
-    // The student deleted this item's event and hasn't decided yet: don't resurrect it.
+    // The student deleted this item's event and hasn't decided yet: don't resurrect it (links
+    // dropped before tombstones existed).
     if (itemId && input.pendingChanges.get(itemId)?.deleted) continue;
     const orphan = adoptable.get(desired.entry.key);
     if (orphan) plan.update.push({ desired, externalId: orphan, linkId: null });

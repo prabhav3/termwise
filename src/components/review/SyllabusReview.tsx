@@ -74,12 +74,17 @@ export interface SyllabusReviewProps {
   upload: SyllabusUpload;
   extraction: SyllabusExtraction;
   onImported: (courseId: string) => void;
+  /**
+   * true when an import starts, false when it fails. The import marks the upload imported before
+   * it settles, so the screen keeps this review mounted meanwhile (its callbacks need it).
+   */
+  onImportingChange: (importing: boolean) => void;
   /** Deletes the upload (already confirmed). */
   onDiscard: () => void;
   discarding: boolean;
 }
 
-export function SyllabusReview({ upload, extraction, onImported, onDiscard, discarding }: SyllabusReviewProps) {
+export function SyllabusReview({ upload, extraction, onImported, onImportingChange, onDiscard, discarding }: SyllabusReviewProps) {
   const { spacing } = useTheme();
   const toast = useToast();
   const { profile } = useAuth();
@@ -172,6 +177,7 @@ export function SyllabusReview({ upload, extraction, onImported, onDiscard, disc
   // ---- import --------------------------------------------------------------------------------
 
   const runImport = () => {
+    onImportingChange(true);
     importer.mutate(
       { upload, draft: fromDraft(draft), termChoice: toTermChoice(term, draft.course) },
       {
@@ -186,6 +192,7 @@ export function SyllabusReview({ upload, extraction, onImported, onDiscard, disc
           });
           onImported(plan.courseId);
         },
+        onError: () => onImportingChange(false),
       },
     );
   };

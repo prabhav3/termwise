@@ -212,6 +212,46 @@ describe('planDiscrepancyWrites', () => {
     expect(planDiscrepancyWrites([existing({ status: 'resolved' })], [record]).upsert).toEqual([record]);
     expect(planDiscrepancyWrites([existing({ status: 'dismissed' })], []).resolveIds).toEqual([]);
   });
+
+  it('keeps a "Keep syllabus" / "Got it" decision (stored as dismissed) across later syncs', () => {
+    const missing = buildItemDiscrepancies({
+      scope: 's',
+      lmsName: 'Canvas',
+      pairs: [],
+      unmatchedSyllabus: [],
+      unmatchedLms: [lms({ external_id: 'a9', title: 'Extra credit', due_date: '2026-11-02' })],
+    })[0];
+    const decided = (record: typeof missing): ExistingDiscrepancy => ({
+      id: 'd2',
+      dedupe_key: record.dedupe_key,
+      status: 'dismissed',
+      title: record.title,
+      detail: record.detail,
+      syllabus_value: record.syllabus_value,
+      lms_value: record.lms_value,
+    });
+    // The difference still exists on every sync, so the same records come back each time.
+    expect(planDiscrepancyWrites([existing({ status: 'dismissed' }), decided(missing)], [record, missing])).toEqual({ upsert: [], resolveIds: [] });
+  });
+
+  it('pairs an item added from a feed event ("Add to my plan") with that event, so it is not offered again', () => {
+    // useActOnDiscrepancy('add_item') creates kind 'other' with the event's title and date.
+    const event = lms({ external_id: 'uid-7', title: 'Lab report 3', due_date: '2026-11-06', due_time: '23:59' });
+    const added = syl({ id: 'new-item', title: 'Lab report 3', kind: 'other', due_date: '2026-11-06', due_time: '23:59' });
+    const result = matchCandidates(
+      [{ id: added.id, title: added.title, kind: added.kind, date: added.due_date }],
+      [{ id: event.external_id, title: event.title, kind: 'lab', date: event.due_date }],
+    );
+    expect(result.pairs).toHaveLength(1);
+    const records = buildItemDiscrepancies({
+      scope: 's',
+      lmsName: 'Moodle',
+      pairs: [{ syllabus: added, lms: event }],
+      unmatchedSyllabus: [],
+      unmatchedLms: [],
+    });
+    expect(records).toEqual([]);
+  });
 });
 
 describe('matchFeedCourses', () => {

@@ -308,6 +308,11 @@ export interface CalendarEventLink {
   pushed_hash: string | null;
   pushed_date: ISODate | null;
   last_seen_at: Timestamp | null;
+  /**
+   * Tombstone: the student deleted this item's entry in their calendar app. It stays off that
+   * calendar while the item is done or the deletion awaits a decision (migration 20261028000100).
+   */
+  deleted_externally: boolean;
   created_at: Timestamp;
 }
 

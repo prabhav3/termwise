@@ -63,7 +63,7 @@ export function CourseSharePanel({ course }: { course: Course }) {
       <NBText variant="small" color="muted">
         {active
           ? `${active.import_count === 0 ? 'No one has' : `${active.import_count} classmate${active.import_count === 1 ? ' has' : 's have'}`} imported it so far. Sharing again sends your latest dates.`
-          : 'Send your deadlines, weights and readings to a study group. Your grades, statuses and notes stay private.'}
+          : 'Send your deadlines, weights, readings and item details to a study group. Your grades, statuses and “My notes” stay private.'}
       </NBText>
       <View style={[styles.actions, { gap: spacing.sm }]}>
         <Button

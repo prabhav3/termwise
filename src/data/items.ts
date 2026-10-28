@@ -1,6 +1,7 @@
 // items: every exam, paper, reading, ... from syllabi, Canvas, shares, or entered by hand.
 import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
+import { normalizeItemRow } from '@/lib/json-columns';
 import { supabase } from '@/lib/supabase';
 import type { Item, ItemStatus, UUID } from '@/types/db';
 
@@ -11,10 +12,12 @@ import { notifyPlanInputsChanged } from './plan-signal';
 
 const INSERT_BATCH = 200;
 
-export function fetchItems(): Promise<Item[]> {
-  return fetchAllPages((from, to) =>
+/** `reading` is reshaped on read: a malformed jsonb value must not reach the planner. */
+export async function fetchItems(): Promise<Item[]> {
+  const rows = await fetchAllPages((from, to) =>
     supabase.from('items').select('*').order('due_date', { nullsFirst: false }).order('id').range(from, to),
   );
+  return rows.map(normalizeItemRow);
 }
 
 export function itemsQueryOptions() {
@@ -43,7 +46,7 @@ export function useItemsWithExternalChanges() {
 }
 
 function afterItemWrite(client: ReturnType<typeof useQueryClient>, item: Item) {
-  upsertInList(client, queryKeys.items(), item);
+  upsertInList(client, queryKeys.items(), normalizeItemRow(item));
   notifyPlanInputsChanged();
 }
 
@@ -112,7 +115,7 @@ export function useSetItemScore() {
           .select('*')
           .single(),
       ),
-    onSuccess: (item) => upsertInList(client, queryKeys.items(), item),
+    onSuccess: (item) => upsertInList(client, queryKeys.items(), normalizeItemRow(item)),
   });
 }
 

@@ -12,13 +12,16 @@
 // Pull: for a link NOT pushed in this run whose pushed_hash equals the current desired hash, an
 // external date different from pushed_date is written to items.external_change =
 // { provider, new_due_date, new_due_time, detected_at }; an external deletion writes
-// { ..., deleted: true } and removes the link.
+// { ..., deleted: true } and keeps the link as a tombstone (deleted_externally = true). A tombstoned
+// item is not pushed again while it is done or that deletion is pending.
 //
 // Contract with the app:
 //   * Accepting a change: the app sets the item's due_date / due_time to the new values and clears
 //     external_change. The item's hash then changes, so the next sync pushes it (same date).
+//     Accepting a deletion marks the item done; the tombstone keeps it off the calendar.
 //   * Rejecting a change: the app clears external_change and sets that link's pushed_hash to null.
-//     The hash no longer matches, so the next sync pushes our date back over the external edit.
+//     The hash no longer matches, so the next sync pushes our date back over the external edit
+//     (or, for a tombstone, drops it and recreates the entry).
 //
 // The provider's incremental cursor (Google syncToken), last_synced_at and last_error are stored
 // on the connection. Provider failures are returned in errors[], never dropped.

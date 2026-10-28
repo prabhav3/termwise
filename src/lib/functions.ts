@@ -3,8 +3,13 @@
 import { FunctionsFetchError, FunctionsHttpError, FunctionsRelayError } from '@supabase/supabase-js';
 
 import type {
+  AccountDeleteResponse,
   AccountRequest,
   ApiError,
+  AppleTokenRequest,
+  AppleTokenResponse,
+  CalendarOAuthFinishRequest,
+  CalendarOAuthFinishResponse,
   CalendarOAuthStartRequest,
   CalendarOAuthStartResponse,
   CalendarSyncRequest,
@@ -115,10 +120,12 @@ export function errorMessage(error: unknown): string {
 type FunctionName =
   | 'parse-syllabus'
   | 'calendar-oauth-start'
+  | 'calendar-oauth-finish'
   | 'calendar-sync'
   | 'canvas'
   | 'lms-sync'
-  | 'account';
+  | 'account'
+  | 'apple-token';
 
 async function invoke<TResponse>(name: FunctionName, body: object): Promise<TResponse> {
   let result: Awaited<ReturnType<typeof supabase.functions.invoke<TResponse>>>;
@@ -164,6 +171,11 @@ export function parseSyllabus(request: ParseSyllabusRequest): Promise<ParseSylla
 
 export function calendarOAuthStart(request: CalendarOAuthStartRequest): Promise<CalendarOAuthStartResponse> {
   return invoke('calendar-oauth-start', request);
+}
+
+/** Attaches the calendar the callback authorized (`pending` from its redirect) to the signed-in account. */
+export function calendarOAuthFinish(request: CalendarOAuthFinishRequest): Promise<CalendarOAuthFinishResponse> {
+  return invoke('calendar-oauth-finish', request);
 }
 
 export function calendarSync(request: CalendarSyncRequest = {}): Promise<CalendarSyncResponse> {
@@ -212,10 +224,21 @@ export function lmsSync(request: Omit<Extract<LmsSyncRequest, { action: 'sync' }
 
 // ---- account --------------------------------------------------------------------------------
 
-/** Permanently deletes the caller's files and account (App Store guideline 5.1.1(v)). */
-export function deleteAccount(): Promise<OkResponse> {
-  const request: AccountRequest = { action: 'delete' };
+/**
+ * Permanently deletes the caller's files and account (App Store guideline 5.1.1(v)) and revokes
+ * their Sign in with Apple token. Pass a fresh Apple authorizationCode when the account has no
+ * stored Apple token (a previous answer of `apple_revocation: 'no_token'`).
+ */
+export function deleteAccount(options: { appleAuthorizationCode?: string } = {}): Promise<AccountDeleteResponse> {
+  const request: AccountRequest = options.appleAuthorizationCode
+    ? { action: 'delete', apple_authorization_code: options.appleAuthorizationCode }
+    : { action: 'delete' };
   return invoke('account', request);
+}
+
+/** Hands the Sign in with Apple authorizationCode to the server, so account deletion can revoke it. */
+export function storeAppleToken(request: AppleTokenRequest): Promise<AppleTokenResponse> {
+  return invoke('apple-token', request);
 }
 
 // ---- public links ------------------------------------------------------------------------------
