@@ -6,6 +6,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useRef, useState } from 'react';
 import { View } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { Button, ErrorBanner, NBText, Screen, ToastProvider, useToast, Wordmark } from '@/components/ui';
 import { AuthProvider, useAuth } from '@/lib/auth';
@@ -25,15 +26,17 @@ export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts(fontAssets);
 
   return (
-    <QueryClientProvider client={queryClient}>
-      <ThemeProvider>
-        <AuthProvider>
-          <ToastProvider>
-            <RootNavigator fontsReady={fontsLoaded || fontError !== null} />
-          </ToastProvider>
-        </AuthProvider>
-      </ThemeProvider>
-    </QueryClientProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <QueryClientProvider client={queryClient}>
+        <ThemeProvider>
+          <AuthProvider>
+            <ToastProvider>
+              <RootNavigator fontsReady={fontsLoaded || fontError !== null} />
+            </ToastProvider>
+          </AuthProvider>
+        </ThemeProvider>
+      </QueryClientProvider>
+    </GestureHandlerRootView>
   );
 }
 

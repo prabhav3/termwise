@@ -11,7 +11,12 @@ export default defineConfig({
     },
   },
   test: {
-    include: ['src/engine/**/*.test.ts', 'src/lib/**/*.test.ts', 'supabase/functions/_shared/**/*.test.ts'],
+    include: [
+      'src/engine/**/*.test.ts',
+      'src/lib/**/*.test.ts',
+      'src/components/**/*.test.ts',
+      'supabase/functions/_shared/**/*.test.ts',
+    ],
     environment: 'node',
   },
 });

@@ -1,10 +1,12 @@
 // Mutations backed by Edge Functions (Canvas, iCal LMS feeds, cloud calendars). Each one
 // invalidates the tables the function writes, so screens refresh without knowing the details.
 import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import * as Crypto from 'expo-crypto';
 
 import type { CalendarOAuthStartRequest, CanvasRequest, LmsSyncRequest } from '@shared/api.ts';
 
 import {
+  AppError,
   calendarOAuthStart,
   calendarSync,
   canvasConnect,
@@ -16,9 +18,11 @@ import {
   lmsConnect,
   lmsSync,
 } from '@/lib/functions';
-import type { UUID } from '@/types/db';
+import { supabase } from '@/lib/supabase';
+import type { Item, LmsDiscrepancy, UUID } from '@/types/db';
 
-import { invalidateAll } from './helpers';
+import type { RowPatch } from './database';
+import { check, invalidateAll, requireUserId, unwrap, upsertInList } from './helpers';
 import { queryKeys } from './keys';
 import { notifyPlanInputsChanged } from './plan-signal';
 
@@ -136,5 +140,143 @@ export function useCalendarSync() {
     mutationFn: (connectionId?: UUID) => calendarSync(connectionId ? { connection_id: connectionId } : {}),
     onSuccess: () =>
       invalidateAll(client, [queryKeys.calendarConnections(), queryKeys.eventLinks(), queryKeys.items()]),
+  });
+}
+
+// ---- iCal subscription feed ------------------------------------------------------------------
+
+/** Issues a new secret for the iCal feed. Calendars subscribed to the old link stop updating. */
+export function useRegenerateIcsToken() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const userId = await requireUserId();
+      return unwrap(
+        await supabase.from('profiles').update({ ics_token: Crypto.randomUUID() }).eq('id', userId).select('*').single(),
+      );
+    },
+    onSuccess: (profile) => client.setQueryData(queryKeys.profile(profile.id), profile),
+  });
+}
+
+// ---- external calendar changes ------------------------------------------------------------------
+
+/**
+ * "Keep mine" for a date the student changed in Google / Outlook / Apple Calendar: clears the
+ * pending change and nulls pushed_hash on every calendar link of the item, so the next sync of
+ * each calendar pushes Termwise's date back out (calendar-sync contract).
+ */
+export function useKeepTermwiseDate() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async (itemId: UUID): Promise<Item> => {
+      check(await supabase.from('calendar_event_links').update({ pushed_hash: null }).eq('key', `item:${itemId}`));
+      return unwrap(await supabase.from('items').update({ external_change: null }).eq('id', itemId).select('*').single());
+    },
+    onSuccess: async (item) => {
+      upsertInList(client, queryKeys.items(), item);
+      await client.invalidateQueries({ queryKey: queryKeys.eventLinks() });
+    },
+  });
+}
+
+// ---- LMS discrepancies ----------------------------------------------------------------------------
+
+export interface LmsStamp {
+  date: string;
+  /** `HH:MM`, or null when the value has no time. */
+  time: string | null;
+}
+
+/** Discrepancy values are `YYYY-MM-DD` or `YYYY-MM-DD HH:MM` for dates (points/weights otherwise). */
+export function parseLmsStamp(value: string | null | undefined): LmsStamp | null {
+  if (!value) return null;
+  const match = /^(\d{4}-\d{2}-\d{2})(?:[ T](\d{2}:\d{2}))?$/.exec(value.trim());
+  return match ? { date: match[1], time: match[2] ?? null } : null;
+}
+
+export type DiscrepancyAction =
+  /** Adopt the LMS due date (or lock time) on the linked item, then resolve. */
+  | 'use_lms'
+  /** The syllabus is right: resolve without changing anything. */
+  | 'keep_syllabus'
+  /** Add an LMS-only assignment to the plan as a new item, then resolve. */
+  | 'add_item'
+  | 'dismiss'
+  | 'reopen';
+
+const NEXT_STATUS: Record<DiscrepancyAction, LmsDiscrepancy['status']> = {
+  use_lms: 'resolved',
+  keep_syllabus: 'resolved',
+  add_item: 'resolved',
+  dismiss: 'dismissed',
+  reopen: 'open',
+};
+
+/**
+ * Acts on one discrepancy. The discrepancy list updates optimistically; item changes go through
+ * the normal replan signal.
+ */
+export function useActOnDiscrepancy() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ discrepancy, action }: { discrepancy: LmsDiscrepancy; action: DiscrepancyAction }) => {
+      let itemChanged = false;
+      if (action === 'use_lms') {
+        const stamp = parseLmsStamp(discrepancy.lms_value);
+        if (!discrepancy.item_id || !stamp) throw new AppError('bad_request', "There's no LMS date to use for this one.");
+        const changes: RowPatch<'items'> = { due_date: stamp.date, due_time: stamp.time };
+        const item = unwrap(
+          await supabase.from('items').update(changes).eq('id', discrepancy.item_id).select('*').single(),
+        );
+        upsertInList(client, queryKeys.items(), item);
+        itemChanged = true;
+      }
+      if (action === 'add_item') {
+        const stamp = parseLmsStamp(discrepancy.lms_value);
+        const item = unwrap(
+          await supabase
+            .from('items')
+            .insert({
+              course_id: discrepancy.course_id,
+              title: discrepancy.title,
+              kind: 'other',
+              due_date: stamp?.date ?? null,
+              due_time: stamp?.time ?? null,
+              source: 'lms',
+            })
+            .select('*')
+            .single(),
+        );
+        upsertInList(client, queryKeys.items(), item);
+        itemChanged = true;
+      }
+      const status = NEXT_STATUS[action];
+      const saved = unwrap(
+        await supabase
+          .from('lms_discrepancies')
+          .update({ status, resolved_at: status === 'open' ? null : new Date().toISOString() })
+          .eq('id', discrepancy.id)
+          .select('*')
+          .single(),
+      );
+      return { saved, itemChanged };
+    },
+    onMutate: async ({ discrepancy, action }) => {
+      await client.cancelQueries({ queryKey: queryKeys.discrepancies() });
+      const previous = client.getQueryData<LmsDiscrepancy[]>(queryKeys.discrepancies());
+      const status = NEXT_STATUS[action];
+      client.setQueryData<LmsDiscrepancy[]>(queryKeys.discrepancies(), (rows) =>
+        rows?.map((row) => (row.id === discrepancy.id ? { ...row, status } : row)),
+      );
+      return { previous };
+    },
+    onError: (_error, _input, context) => {
+      if (context?.previous) client.setQueryData(queryKeys.discrepancies(), context.previous);
+    },
+    onSuccess: ({ saved, itemChanged }) => {
+      upsertInList(client, queryKeys.discrepancies(), saved);
+      if (itemChanged) notifyPlanInputsChanged();
+    },
   });
 }
