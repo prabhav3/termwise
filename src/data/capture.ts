@@ -12,12 +12,11 @@ import { replan } from '@/lib/planner';
 import { removeStoredFiles, uploadCapturedFiles, type CapturedFile } from '@/lib/uploads';
 import { supabase } from '@/lib/supabase';
 import { nextCourseColor } from '@/theme/tokens';
-import type { Course, GradingComponent, Item, SyllabusUpload, Textbook, UUID } from '@/types/db';
+import type { Course, GradingComponent, SyllabusUpload, Textbook, UUID } from '@/types/db';
 
 import { componentsQueryOptions } from './components';
 import { coursesQueryOptions } from './courses';
 import type { NewRow, RowPatch } from './database';
-import { itemLinkKey } from './eventLinks';
 import { check, chunk, invalidateAll, requireUserId, unwrap, upsertInList } from './helpers';
 import { itemsQueryOptions } from './items';
 import { queryKeys } from './keys';
@@ -366,27 +365,6 @@ export function useSaveCourse() {
       upsertInList(client, queryKeys.courses(), course);
       await invalidateAll(client, [queryKeys.terms(), queryKeys.components(), queryKeys.items()]);
       notifyPlanInputsChanged();
-    },
-  });
-}
-
-// ---- external calendar changes --------------------------------------------------------------------------
-
-/**
- * "Keep mine": drops the date the student set in Google/Outlook and forgets the pushed hash for
- * this item, so the next calendar sync pushes Termwise's date back out.
- */
-export function useKeepMyItemDate() {
-  const client = useQueryClient();
-  return useMutation({
-    mutationFn: async (itemId: UUID): Promise<Item> => {
-      const item = unwrap(await supabase.from('items').update({ external_change: null }).eq('id', itemId).select('*').single());
-      check(await supabase.from('calendar_event_links').update({ pushed_hash: null }).eq('key', itemLinkKey(itemId)));
-      return item;
-    },
-    onSuccess: async (item) => {
-      upsertInList(client, queryKeys.items(), item);
-      await client.invalidateQueries({ queryKey: queryKeys.eventLinks() });
     },
   });
 }

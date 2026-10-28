@@ -18,6 +18,7 @@ import {
   segmentEndsAt,
   segmentProgress,
   spokenDuration,
+  upcomingAlerts,
   useFocusSession,
   type TimerSegment,
   type TimerState,
@@ -207,6 +208,47 @@ describe('copy', () => {
     expect(segmentEndAlert(onBreak, task)).toEqual({ title: "Break's over", body: `Ready for focus 2 of 2: ${task}` });
     const last = run(onBreak, { type: 'skip_break', now: T0 + 26 * MIN });
     expect(segmentEndAlert(last, task)?.title).toBe('Session complete');
+  });
+});
+
+describe('upcomingAlerts', () => {
+  const task = 'Study 35 mins for PSY 101 Quiz 1';
+
+  it('is empty unless the timer is running', () => {
+    const ready = createTimer(TWO_ROUNDS);
+    expect(upcomingAlerts(ready, task)).toEqual([]);
+    const paused = run(ready, { type: 'start', now: T0 }, { type: 'pause', now: T0 + MIN });
+    expect(upcomingAlerts(paused, task)).toEqual([]);
+    const finished = run(ready, { type: 'start', now: T0 }, { type: 'finish', now: T0 + MIN });
+    expect(upcomingAlerts(finished, task)).toEqual([]);
+  });
+
+  it('covers the focus end and the break that starts on its own, then stops at "ready"', () => {
+    const focus = reduceTimer(createTimer(TWO_ROUNDS), { type: 'start', now: T0 });
+    const alerts = upcomingAlerts(focus, task);
+    expect(alerts.map((alert) => alert.at)).toEqual([T0 + 25 * MIN, T0 + 30 * MIN]);
+    expect(alerts.map((alert) => alert.title)).toEqual(['Focus done — take 5 min', "Break's over"]);
+  });
+
+  it('accounts for time banked before a pause', () => {
+    const resumed = run(
+      createTimer(TWO_ROUNDS),
+      { type: 'start', now: T0 },
+      { type: 'pause', now: T0 + 10 * MIN },
+      { type: 'start', now: T0 + 20 * MIN },
+    );
+    expect(upcomingAlerts(resumed, task).map((alert) => alert.at)).toEqual([T0 + 35 * MIN, T0 + 40 * MIN]);
+  });
+
+  it('has a single alert during a break and for the last focus segment', () => {
+    const onBreak = run(createTimer(TWO_ROUNDS), { type: 'start', now: T0 }, { type: 'tick', now: T0 + 26 * MIN });
+    expect(upcomingAlerts(onBreak, task)).toEqual([
+      { at: T0 + 30 * MIN, title: "Break's over", body: `Ready for focus 2 of 2: ${task}` },
+    ]);
+    const last = run(onBreak, { type: 'skip_break', now: T0 + 27 * MIN });
+    const final = upcomingAlerts(last, task);
+    expect(final).toHaveLength(1);
+    expect(final[0]).toMatchObject({ at: T0 + 37 * MIN, title: 'Session complete' });
   });
 });
 

@@ -1,3 +1,4 @@
+import { useQueryClient } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import { useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
@@ -17,8 +18,8 @@ import {
   Toggle,
   useToast,
 } from '@/components/ui';
-import { useActiveTerm, useCanvasImport, useCourses } from '@/data';
-import { errorMessage } from '@/lib/functions';
+import { queryKeys, useActiveTerm, useCanvasImport, useCourses } from '@/data';
+import { errorMessage, isAppError } from '@/lib/functions';
 import { haptic } from '@/lib/haptics';
 import { useTheme } from '@/theme';
 import type { Course } from '@/types/db';
@@ -190,6 +191,7 @@ export interface CanvasCoursePickerProps {
 export function CanvasCoursePicker({ connectionId, courses, onDone, onCancel }: CanvasCoursePickerProps) {
   const { spacing } = useTheme();
   const toast = useToast();
+  const client = useQueryClient();
   const existing = useCourses();
   const activeTerm = useActiveTerm();
   const importCourses = useCanvasImport();
@@ -227,6 +229,12 @@ export function CanvasCoursePicker({ connectionId, courses, onDone, onCancel }: 
       {
         onSuccess: (response) =>
           toast.show({ tone: 'success', title: 'Canvas imported', message: `${plural(response.imported.length, 'course')} added to your plan.` }),
+        // Token expired mid-import: refresh the connection so the screen offers to reconnect.
+        onError: (error) => {
+          if (isAppError(error) && error.code === 'upstream_auth') {
+            void client.invalidateQueries({ queryKey: queryKeys.lmsConnections() });
+          }
+        },
       },
     );
 

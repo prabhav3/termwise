@@ -10,6 +10,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { Button, ErrorBanner, NBText, Screen, ToastProvider, useToast, Wordmark } from '@/components/ui';
 import { AuthProvider, useAuth } from '@/lib/auth';
+import { useAppleCalendarAutoSync } from '@/lib/calendar/apple';
 import type { AppError } from '@/lib/functions';
 import { useNotificationRouting } from '@/lib/notifications';
 import { useReplanOnForeground, useReplanOnInputChanges } from '@/lib/planner';
@@ -171,6 +172,7 @@ function SignedInEffects() {
   };
   useReplanOnForeground(onError);
   useReplanOnInputChanges(onError);
+  useAppleCalendarAutoSync();
   useNotificationRouting((path) => router.navigate(path as Href));
   return null;
 }

@@ -1,6 +1,6 @@
 import * as Clipboard from 'expo-clipboard';
 import * as Linking from 'expo-linking';
-import { Alert, Platform, StyleSheet, View } from 'react-native';
+import { Alert, StyleSheet, View } from 'react-native';
 
 import { Button, NBText, useToast } from '@/components/ui';
 import { useRegenerateIcsToken } from '@/data';
@@ -23,10 +23,10 @@ export function IcsFeedSection({ icsToken }: { icsToken: string }) {
   const httpsUrl = icsFeedUrl(icsToken);
   const webcalUrl = icsSubscribeUrl(icsToken);
 
-  const copy = async () => {
+  /** The webcal:// link shown above, or its https:// twin for apps that refuse webcal. */
+  const copy = async (url: string) => {
     try {
-      if (Platform.OS === 'ios') await Clipboard.setUrlAsync(httpsUrl);
-      else await Clipboard.setStringAsync(httpsUrl);
+      await Clipboard.setStringAsync(url);
       toast.show({ tone: 'success', message: 'Subscription link copied.' });
     } catch {
       toast.show({ tone: 'danger', message: "Couldn't copy the link. Long-press it to select it instead." });
@@ -93,10 +93,17 @@ export function IcsFeedSection({ icsToken }: { icsToken: string }) {
           label="Copy link"
           variant="secondary"
           icon={{ name: 'doc.on.doc', fallback: '⧉' }}
-          onPress={() => void copy()}
+          onPress={() => void copy(webcalUrl)}
         />
       </View>
       <Steps steps={OTHER_APPS} />
+      <Button
+        label="Copy as an https:// link"
+        variant="ghost"
+        size="sm"
+        accessibilityHint="For calendar apps that don't accept webcal links"
+        onPress={() => void copy(httpsUrl)}
+      />
       <NBText variant="small" color="muted">
         Anyone with this link can see your deadlines. Keep it to yourself.
       </NBText>

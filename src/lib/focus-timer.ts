@@ -265,6 +265,31 @@ export function segmentEndAlert(state: TimerState, task: string): { title: strin
   };
 }
 
+export interface SegmentAlert {
+  /** Epoch ms the alert fires. */
+  at: number;
+  title: string;
+  body: string;
+}
+
+/**
+ * Every alert due before the student has to touch the phone again: the end of the running
+ * segment and, because a break starts on its own when focus ends, the end of that break too.
+ * Empty unless running. Lets a locked phone still hear "Break's over".
+ */
+export function upcomingAlerts(state: TimerState, task: string): SegmentAlert[] {
+  const alerts: SegmentAlert[] = [];
+  let next = state;
+  while (alerts.length < next.segments.length) {
+    const at = segmentEndsAt(next);
+    const content = segmentEndAlert(next, task);
+    if (at === null || content === null) break;
+    alerts.push({ at, ...content });
+    next = advance(next, at);
+  }
+  return alerts;
+}
+
 // ---- live session store ------------------------------------------------------------------------
 
 export interface FocusTaskInfo {

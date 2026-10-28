@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { AccessibilityInfo, BackHandler, StyleSheet, View } from 'react-native';
 
 import { Countdown } from '@/components/focus/Countdown';
-import { cancelSegmentAlert, scheduleSegmentAlert } from '@/components/focus/segment-alerts';
+import { cancelSegmentAlerts, scheduleSegmentAlerts } from '@/components/focus/segment-alerts';
 import { SegmentList } from '@/components/focus/SegmentList';
 import {
   DEFAULT_BREAK_MINUTES,
@@ -45,9 +45,8 @@ import {
   isInProgress,
   plannedFocusMinutes,
   reduceTimer,
-  segmentEndAlert,
-  segmentEndsAt,
   segmentName,
+  upcomingAlerts,
   useFocusSession,
   type FocusTaskInfo,
   type TimerStatus,
@@ -59,7 +58,7 @@ import { useMarkBlockDone, usePlan } from '@/lib/planner';
 import { useTheme } from '@/theme';
 
 function leaveFocus() {
-  void cancelSegmentAlert();
+  void cancelSegmentAlerts();
   useFocusSession.getState().clear();
   if (router.canGoBack()) router.back();
   else router.replace('/' as Href);
@@ -88,7 +87,6 @@ export default function FocusScreen() {
   const breakMinutes = profile?.pomodoro_break_minutes ?? DEFAULT_BREAK_MINUTES;
   const plan = view.status === 'ready' ? view.plan : null;
   const courses = view.status === 'ready' ? view.courses : null;
-  const today = view.status === 'ready' ? view.today : null;
 
   const blockKeyParam = firstParam(params.blockKey);
   const itemIdParam = firstParam(params.itemId);
@@ -123,21 +121,20 @@ export default function FocusScreen() {
   const running = timer?.status === 'running';
   const now = useTimerClock(running);
 
-  // One end-of-segment alert while running; none otherwise.
-  const endsAt = timer ? segmentEndsAt(timer) : null;
-  const alert = timer && task ? segmentEndAlert(timer, task.label) : null;
-  const alertTitle = alert?.title ?? null;
-  const alertBody = alert?.body ?? null;
+  // While running: alerts for the end of this segment (and of the break that follows it on its
+  // own). Paused, ready or finished: none. Re-run once notification permission comes back.
+  // `timer` keeps its identity between ticks, so this only reschedules on real transitions.
+  const taskLabel = task?.label ?? null;
+  const alerts = useMemo(() => (timer && taskLabel ? upcomingAlerts(timer, taskLabel) : []), [timer, taskLabel]);
   useEffect(() => {
-    if (endsAt !== null && alertTitle && alertBody) void scheduleSegmentAlert(endsAt, { title: alertTitle, body: alertBody });
-    else void cancelSegmentAlert();
-  }, [endsAt, alertTitle, alertBody, permission]);
+    if (alerts.length > 0) void scheduleSegmentAlerts(alerts);
+    else void cancelSegmentAlerts();
+  }, [alerts, permission]);
 
   // Haptic + VoiceOver announcement whenever the segment changes or the session ends.
   const index = timer?.index ?? -1;
   const status: TimerStatus | null = timer?.status ?? null;
   const segmentText = timer ? segmentName(currentSegment(timer)) : '';
-  const taskLabel = task?.label ?? null;
   const previous = useRef({ index, status, taskLabel });
   useEffect(() => {
     const before = previous.current;
@@ -201,7 +198,7 @@ export default function FocusScreen() {
       const ended = reduceTimer(state.timer, { type: 'finish', now: Date.now() });
       logFinish({ id: state.sessionId, focusedMinutes: focusedMinutes(ended, 0), completed: false });
     }
-    void cancelSegmentAlert();
+    void cancelSegmentAlerts();
     state.begin(next, segmentsFor(next.minutes, { focus: focusMinutes, shortBreak: breakMinutes }));
   };
 
