@@ -35,10 +35,10 @@
         {
           "backgroundColor": "#FFF4DE",
           "image": "./assets/images/splash-icon.png",
-          "imageWidth": 120,
+          "imageWidth": 150,
           "dark": {
             "backgroundColor": "#141414",
-            "image": "./assets/images/splash-icon.png"
+            "image": "./assets/images/splash-icon-dark.png"
           }
         }
       ],

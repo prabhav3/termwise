@@ -2,10 +2,11 @@
 // `syllabi/<uid>/<upload_id>/<n>.<ext>`, starts parse-syllabus, then watches the row with
 // useUploadStatus() until it reaches needs_review or failed.
 import { queryOptions, useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 
 import { parseSyllabus } from '@/lib/functions';
 import { supabase } from '@/lib/supabase';
+import { watchUploadRow } from '@/lib/upload-channel';
 import type { SyllabusUpload, UploadStatus, UUID } from '@/types/db';
 
 import type { NewRow, RowPatch } from './database';
@@ -99,6 +100,7 @@ export interface UploadStatusResult {
  */
 export function useUploadStatus(id: UUID | null | undefined): UploadStatusResult {
   const client = useQueryClient();
+  const watcherId = useId();
   const [live, setLive] = useState(false);
 
   const query = useQuery({
@@ -111,29 +113,25 @@ export function useUploadStatus(id: UUID | null | undefined): UploadStatusResult
 
   useEffect(() => {
     if (!id) return;
-    const channel = supabase
-      .channel(`syllabus-upload:${id}`)
-      .on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'syllabus_uploads', filter: `id=eq.${id}` },
-        (payload) => {
-          const progress = readProgress(payload.new);
-          if (!progress || progress.id !== id) return;
-          const cached = client.getQueryData<SyllabusUpload | null>(queryKeys.upload(id));
-          if (cached) writeUpload(client, { ...cached, ...progress });
-          // The extraction can be large: fetch the full row once the job settles.
-          if (isUploadSettled(progress.status) || !cached) {
-            void client.invalidateQueries({ queryKey: queryKeys.upload(id) });
-            void client.invalidateQueries({ queryKey: queryKeys.uploads(), exact: true });
-          }
-        },
-      )
-      .subscribe((status) => setLive(status === 'SUBSCRIBED'));
-    return () => {
-      setLive(false);
-      void supabase.removeChannel(channel);
-    };
-  }, [id, client]);
+    // Each hook instance owns its channel: see src/lib/upload-channel.ts.
+    return watchUploadRow(
+      supabase,
+      id,
+      watcherId,
+      (row) => {
+        const progress = readProgress(row);
+        if (!progress || progress.id !== id) return;
+        const cached = client.getQueryData<SyllabusUpload | null>(queryKeys.upload(id));
+        if (cached) writeUpload(client, { ...cached, ...progress });
+        // The extraction can be large: fetch the full row once the job settles.
+        if (isUploadSettled(progress.status) || !cached) {
+          void client.invalidateQueries({ queryKey: queryKeys.upload(id) });
+          void client.invalidateQueries({ queryKey: queryKeys.uploads(), exact: true });
+        }
+      },
+      setLive,
+    );
+  }, [id, client, watcherId]);
 
   const upload = query.data ?? null;
   return {

@@ -93,6 +93,43 @@ export function shouldUseFilesApi(binaryByteLengths: readonly number[], textByte
   return encoded + textByteLength > INLINE_PAYLOAD_LIMIT_BYTES;
 }
 
+/** Characters the Files API rejects in a file name (400 "Invalid file name"). */
+// deno-lint-ignore no-control-regex
+const FILES_API_FORBIDDEN = /[<>:"|?*\\/\u0000-\u001f]/g;
+/** UTF-8 bytes kept from the name's stem: well inside the API's 1–255 characters however they are counted. */
+const FILES_API_STEM_BYTES = 200;
+const MEDIA_EXTENSIONS: Record<string, string> = {
+  'application/pdf': 'pdf',
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+};
+
+const utf8Length = (codePoint: number): number => (codePoint < 0x80 ? 1 : codePoint < 0x800 ? 2 : codePoint < 0x10000 ? 3 : 4);
+
+/**
+ * The student's file name made acceptable to the Files API upload (1–255 characters, none of
+ * < > : " | ? * \ / or U+0000–U+001F): forbidden characters become "_", the stem is shortened,
+ * and the extension is kept (or taken from the media type). Only for the upload itself; document
+ * titles and the prompt keep the original name.
+ */
+export function filesApiFileName(name: string, mediaType: string): string {
+  const cleaned = name.replace(FILES_API_FORBIDDEN, '_').trim();
+  const match = /\.([a-z0-9]{1,10})$/i.exec(cleaned);
+  const extension = match ? match[1].toLowerCase() : (MEDIA_EXTENSIONS[mediaType] ?? 'bin');
+  let stem = '';
+  let bytes = 0;
+  for (const char of match ? cleaned.slice(0, match.index) : cleaned) {
+    bytes += utf8Length(char.codePointAt(0) ?? 0);
+    if (bytes > FILES_API_STEM_BYTES) break;
+    stem += char;
+  }
+  stem = stem.trim();
+  // A stem of only dots, dashes, underscores (replaced characters) or spaces says nothing.
+  return `${/[^\s._-]/u.test(stem) ? stem : 'document'}.${extension}`;
+}
+
 /** Normalize plain text: unify newlines, drop control/zero-width characters, trim lines, squeeze blank runs. */
 export function compactText(text: string): string {
   return text

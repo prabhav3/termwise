@@ -1,7 +1,8 @@
 import { createContext, use, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AccessibilityInfo, Pressable, StyleSheet, View } from 'react-native';
+import { AccessibilityInfo, Platform, Pressable, StyleSheet, View } from 'react-native';
 import Animated, { FadeInUp, FadeOutUp } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { FullWindowOverlay } from 'react-native-screens';
 
 import { haptic } from '@/lib/haptics';
 import { useTheme } from '@/theme';
@@ -69,9 +70,24 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext value={api}>
       {children}
-      {toast ? <ToastView key={toast.id} toast={toast} onDismiss={api.hide} /> : null}
+      {toast ? (
+        <ToastLayer key={toast.id}>
+          <ToastView toast={toast} onDismiss={api.hide} />
+        </ToastLayer>
+      ) : null}
     </ToastContext>
   );
+}
+
+/**
+ * Native-stack modals (Focus, Upload, ...) and Sheets (RN Modal) are presented above the root
+ * view, so on iOS the toast is drawn in a window-level overlay. It mounts per toast: the overlay
+ * attaches to the window when it mounts, which puts it above whatever is presented at that time.
+ * It doesn't trap VoiceOver (the toast is also announced).
+ */
+function ToastLayer({ children }: { children: ReactNode }) {
+  if (Platform.OS !== 'ios') return children;
+  return <FullWindowOverlay unstable_accessibilityContainerViewIsModal={false}>{children}</FullWindowOverlay>;
 }
 
 function ToastView({ toast, onDismiss }: { toast: ToastState; onDismiss: () => void }) {

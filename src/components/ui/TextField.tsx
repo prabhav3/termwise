@@ -87,7 +87,7 @@ export function TextField({
         {right}
       </View>
       {error ? (
-        <NBText variant="smallBold" color="red" accessibilityRole="alert">
+        <NBText variant="smallBold" color="danger" accessibilityRole="alert">
           {`⚠ ${error}`}
         </NBText>
       ) : helper ? (

@@ -6,7 +6,7 @@
 // 302-redirects to the app's return_url with status=authorized, provider, and a one-time
 // `pending` code; the app hands that to calendar-oauth-finish, which attaches the calendar only
 // to the Termwise account that started the flow. Errors redirect with status=error and a
-// student-safe message. A request whose state can't be verified gets a plain page: its
+// student-safe message. A request whose state can't be verified gets a plain-text page: its
 // return_url is untrusted, so it is never redirected to.
 import { type SupabaseContext, withSupabase } from '@supabase/server';
 import type { CloudCalendarProvider } from '../_shared/api.ts';
@@ -42,11 +42,19 @@ const TOKEN_URLS: Record<CloudCalendarProvider, string> = {
 /** A failure whose message is safe to show the student in the app. */
 class CallbackError extends Error {}
 
+/**
+ * Plain text, not HTML: without a custom domain Supabase rewrites GET text/html responses to
+ * text/plain, which would show the sign-in sheet raw markup.
+ */
 function plainPage(status: number, message: string): Response {
-  const body = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Termwise</title></head><body style="font-family:system-ui,sans-serif;background:#FFF4DE;color:#111;padding:24px"><h1 style="font-size:22px">Termwise</h1><p>${message}</p></body></html>`;
-  return new Response(body, {
+  return new Response(`Termwise\n\n${message}\n`, {
     status,
-    headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' },
+    headers: {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'X-Content-Type-Options': 'nosniff',
+      'Cache-Control': 'no-store',
+      'Referrer-Policy': 'no-referrer',
+    },
   });
 }
 

@@ -16,6 +16,7 @@ export interface ApiError {
       | 'too_large'
       | 'unsupported_file'
       | 'ai_refused'
+      | 'apple_reauth_required' // account delete (409): sign in with Apple again, then retry
       | 'internal';
     message: string;         // safe to show to the student
   };
@@ -209,16 +210,26 @@ export interface LmsSyncResponse {
 // account  (auth: user)
 // POST { action: 'delete' } -> deletes the caller's storage files, revokes their Sign in with
 // Apple tokens (Apple's /auth/revoke), then deletes the auth user (cascades). Required by App
-// Store guideline 5.1.1(v). Deletion never fails because of Apple: the outcome is reported in
-// `apple_revocation` instead.
+// Store guideline 5.1.1(v).
+// One answer stops before anything is deleted: 409 `apple_reauth_required` when the account
+// signed in with Apple, the server can revoke, and no Apple token is stored (sign-in's
+// apple-token call failed or ran before the server had its Apple key). The app then runs
+// Sign in with Apple again (no scopes) and repeats the delete with `apple_authorization_code`,
+// or with `skip_apple_revocation: true` when the student cancels. Otherwise deletion never fails
+// because of Apple: the outcome is reported in `apple_revocation`.
 // ---------------------------------------------------------------------------
 export interface AccountRequest {
   action: 'delete';
   /**
-   * A fresh Sign in with Apple authorizationCode, for accounts with no stored Apple token (the
-   * app re-authorizes with Apple when a previous delete answered `apple_revocation: 'no_token'`).
+   * A fresh Sign in with Apple authorizationCode (single use, valid five minutes), sent after a
+   * 409 `apple_reauth_required` answer so the server can revoke the account's Apple tokens.
    */
   apple_authorization_code?: string;
+  /**
+   * true after the student declined (or couldn't finish) re-authorizing with Apple: delete
+   * anyway, answering `apple_revocation: 'no_token'`.
+   */
+  skip_apple_revocation?: boolean;
 }
 export type AppleRevocationOutcome =
   /** Apple's refresh token was revoked. */
@@ -227,7 +238,7 @@ export type AppleRevocationOutcome =
   | 'not_linked'
   /** The server has no Apple key configured (APPLE_TEAM_ID / APPLE_KEY_ID / APPLE_PRIVATE_KEY). */
   | 'skipped'
-  /** Apple sign-in account, but no stored token and no authorization code was sent. */
+  /** Apple sign-in account with no usable token: re-authorization was skipped or returned none. */
   | 'no_token'
   /** Apple rejected the request or could not be reached. */
   | 'failed';

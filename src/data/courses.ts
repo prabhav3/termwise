@@ -1,5 +1,6 @@
 import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
+import { normalizeCourseRow } from '@/lib/json-columns';
 import { supabase } from '@/lib/supabase';
 import { nextCourseColor } from '@/theme/tokens';
 import type { Course, UUID } from '@/types/db';
@@ -9,8 +10,9 @@ import { check, invalidateAll, removeFromList, unwrap, upsertInList } from './he
 import { queryKeys } from './keys';
 import { notifyPlanInputsChanged } from './plan-signal';
 
+/** `grade_scale` and `policies` are reshaped on read: a malformed (e.g. shared) jsonb value must not crash a screen. */
 export async function fetchCourses(): Promise<Course[]> {
-  return unwrap(await supabase.from('courses').select('*').order('created_at').order('id'));
+  return unwrap(await supabase.from('courses').select('*').order('created_at').order('id')).map(normalizeCourseRow);
 }
 
 /** Every course, archived ones included (screens filter with `useCourses`). */
@@ -62,7 +64,7 @@ export function useCreateCourse() {
       return unwrap(await supabase.from('courses').insert(course).select('*').single());
     },
     onSuccess: (course) => {
-      upsertInList(client, queryKeys.courses(), course);
+      upsertInList(client, queryKeys.courses(), normalizeCourseRow(course));
       notifyPlanInputsChanged();
     },
   });
@@ -74,7 +76,7 @@ export function useUpdateCourse() {
     mutationFn: async ({ id, changes }: { id: UUID; changes: RowPatch<'courses'> }) =>
       unwrap(await supabase.from('courses').update(changes).eq('id', id).select('*').single()),
     onSuccess: (course) => {
-      upsertInList(client, queryKeys.courses(), course);
+      upsertInList(client, queryKeys.courses(), normalizeCourseRow(course));
       notifyPlanInputsChanged();
     },
   });

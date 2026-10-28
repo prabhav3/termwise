@@ -8,6 +8,7 @@ import { normalizeExtraction, type ExtractedTextbook, type SyllabusExtraction } 
 
 import { AppError, toAppError } from '@/lib/functions';
 import { planImport, planTocImport, type ImportPlan, type MergeTarget, type TermChoice } from '@/lib/import-extraction';
+import { normalizeCourseRow } from '@/lib/json-columns';
 import { replan } from '@/lib/planner';
 import { removeStoredFiles, uploadCapturedFiles, type CapturedFile } from '@/lib/uploads';
 import { supabase } from '@/lib/supabase';
@@ -362,7 +363,7 @@ export function useSaveCourse() {
       return course;
     },
     onSuccess: async (course) => {
-      upsertInList(client, queryKeys.courses(), course);
+      upsertInList(client, queryKeys.courses(), normalizeCourseRow(course));
       await invalidateAll(client, [queryKeys.terms(), queryKeys.components(), queryKeys.items()]);
       notifyPlanInputsChanged();
     },

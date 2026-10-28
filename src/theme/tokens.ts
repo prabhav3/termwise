@@ -23,6 +23,11 @@ export interface ColorTokens {
   orange: string;
   red: string;
   purple: string;
+  /**
+   * Error and destructive text: a red that keeps 4.5:1 on bg, surface and surfaceAlt (DESIGN.md).
+   * `red` stays the fill and border color; as small text it is too light in light mode.
+   */
+  danger: string;
   /** Dimmed backdrop behind sheets and modals. */
   scrim: string;
 }
@@ -51,6 +56,7 @@ export const palettes: Record<ColorScheme, ColorTokens> = {
     orange: '#FF8A3D',
     red: '#FF4747',
     purple: '#9B5DE5',
+    danger: '#C81E1E',
     scrim: 'rgba(17, 17, 17, 0.45)',
   },
   dark: {
@@ -72,6 +78,7 @@ export const palettes: Record<ColorScheme, ColorTokens> = {
     orange: '#FF9A55',
     red: '#FF5C5C',
     purple: '#B07CFF',
+    danger: '#FF5C5C',
     scrim: 'rgba(0, 0, 0, 0.6)',
   },
 };

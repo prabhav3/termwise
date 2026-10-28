@@ -7,6 +7,8 @@
 // fields, so nullable *strings* are sent as plain strings where "" stands for null, and
 // `parseStructuredOutput` maps "" back to null before zod validation. Nullable numbers and
 // objects keep a real `anyOf [..., null]` union; together they fit comfortably in the budget.
+// Structured outputs also don't guarantee the capitalization of enum / const values, so
+// `parseStructuredOutput` maps a case-only mismatch ("Exam") back to the schema's value ("exam").
 
 import { z } from 'zod';
 
@@ -51,11 +53,22 @@ const EMPTY_MEANS_NULL = 'Use "" (empty string) for null.';
 /** Path into a JSON value: property names, with "*" meaning "every element of this array". */
 export type ValuePath = readonly string[];
 
+/** The string `enum` / `const` values allowed at one path. */
+export interface EnumValues {
+  path: ValuePath;
+  values: readonly string[];
+}
+
 export interface ClaudeOutputSchema {
   /** Schema for `output_config.format = { type: 'json_schema', schema }`. */
   schema: JsonObject;
   /** Nullable string fields that were sent as plain strings; "" in the output means null. */
   emptyStringAsNull: readonly ValuePath[];
+  /**
+   * String enum / const values by path. Structured outputs don't guarantee their capitalization,
+   * so `parseStructuredOutput` restores the schema's spelling before validation.
+   */
+  enumValues: readonly EnumValues[];
 }
 
 export interface SanitizeOptions {
@@ -101,6 +114,15 @@ function nullableStringDescription(node: JsonObject): { description: unknown } |
 export function sanitizeJsonSchema(input: JsonObject, options: SanitizeOptions = {}): ClaudeOutputSchema {
   const collapse = options.collapseNullableStrings ?? true;
   const emptyStringAsNull: ValuePath[] = [];
+  const enumsByPath = new Map<string, { path: ValuePath; values: Set<string> }>();
+  const recordEnum = (path: string[], values: unknown[]): void => {
+    const strings = values.filter((v): v is string => typeof v === 'string');
+    if (strings.length === 0) return;
+    const key = JSON.stringify(path);
+    const entry = enumsByPath.get(key) ?? { path, values: new Set<string>() };
+    for (const value of strings) entry.values.add(value);
+    enumsByPath.set(key, entry);
+  };
 
   const visit = (node: unknown, path: string[]): JsonObject => {
     if (!isObject(node)) throw new Error(`Schema node at "${path.join('.') || '<root>'}" is not an object.`);
@@ -168,11 +190,14 @@ export function sanitizeJsonSchema(input: JsonObject, options: SanitizeOptions =
       out.required = Object.keys(props);
       out.additionalProperties = false;
     }
+    if (Array.isArray(out.enum)) recordEnum(path, out.enum);
+    if ('const' in out) recordEnum(path, [out.const]);
     return out;
   };
 
   const schema = visit(input, []);
-  return { schema, emptyStringAsNull };
+  const enumValues = [...enumsByPath.values()].map(({ path, values }) => ({ path, values: [...values] }));
+  return { schema, emptyStringAsNull, enumValues };
 }
 
 /** Every JSON Schema node in the tree (property schemas, items, union branches). */
@@ -249,6 +274,35 @@ export function restoreEmptyStringsAsNull(value: unknown, paths: readonly ValueP
   return value;
 }
 
+/**
+ * In place: a string at an enum path that matches one allowed value only case-insensitively
+ * becomes that value ("Exam" -> "exam"). Exact matches, ambiguous matches, and other values are
+ * left for validation to judge. "*" at the end of a path covers every array element.
+ */
+export function restoreEnumCasing(value: unknown, enums: readonly EnumValues[]): unknown {
+  const canonical = (allowed: readonly string[], leaf: unknown): unknown => {
+    if (typeof leaf !== 'string' || allowed.includes(leaf)) return leaf;
+    const lower = leaf.toLowerCase();
+    const matches = allowed.filter((v) => v.toLowerCase() === lower);
+    return matches.length === 1 ? matches[0] : leaf;
+  };
+  const apply = (target: unknown, path: ValuePath, allowed: readonly string[]): void => {
+    if (path.length === 0 || target == null) return;
+    const [head, ...rest] = path;
+    if (head === '*') {
+      if (!Array.isArray(target)) return;
+      if (rest.length === 0) for (let i = 0; i < target.length; i++) target[i] = canonical(allowed, target[i]);
+      else for (const el of target) apply(el, rest, allowed);
+      return;
+    }
+    if (!isObject(target) || !(head in target)) return;
+    if (rest.length === 0) target[head] = canonical(allowed, target[head]);
+    else apply(target[head], rest, allowed);
+  };
+  for (const { path, values } of enums) apply(value, path, values);
+  return value;
+}
+
 export type StructuredParseResult<T> =
   | { ok: true; data: T }
   | { ok: false; reason: 'invalid_json' | 'schema_mismatch'; detail: string };
@@ -260,7 +314,7 @@ export type StructuredParseResult<T> =
 export function parseStructuredOutput<S extends z.ZodType>(
   text: string,
   schema: S,
-  output: Pick<ClaudeOutputSchema, 'emptyStringAsNull'>,
+  output: Pick<ClaudeOutputSchema, 'emptyStringAsNull' | 'enumValues'>,
 ): StructuredParseResult<z.output<S>> {
   let raw: unknown;
   try {
@@ -268,7 +322,7 @@ export function parseStructuredOutput<S extends z.ZodType>(
   } catch (err) {
     return { ok: false, reason: 'invalid_json', detail: err instanceof Error ? err.name : 'parse error' };
   }
-  const restored = restoreEmptyStringsAsNull(raw, output.emptyStringAsNull);
+  const restored = restoreEnumCasing(restoreEmptyStringsAsNull(raw, output.emptyStringAsNull), output.enumValues);
   const parsed = schema.safeParse(restored);
   if (parsed.success) return { ok: true, data: parsed.data };
   const paths = parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join('.') || '<root>'}: ${issue.code}`);

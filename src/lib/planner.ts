@@ -37,7 +37,7 @@ import type { Course, GradingComponent, Item, PlanBlock, Profile, TermEvent, Tex
 import { useAuth } from './auth';
 import { addDaysISO, todayISO, zonedDateTimeToDate, type ISODate } from './dates';
 import { AppError, toAppError } from './functions';
-import { normalizeItemRow, normalizeTextbookRow } from './json-columns';
+import { normalizeCourseRow, normalizeItemRow, normalizeTextbookRow } from './json-columns';
 import { scheduleTriageNotifications } from './notifications';
 import { queryClient } from './query-client';
 import { readString, storageKeys, writeString } from './storage';
@@ -76,7 +76,9 @@ export function plannerSettings(profile: Profile, today: ISODate): PlannerSettin
 }
 
 export function toEngineCourse(course: Course): EngineCourse {
-  return { ...course, policies: { ...course.policies } };
+  // Cached rows may come from a write that skipped the read-time reshaping.
+  const normalized = normalizeCourseRow(course);
+  return { ...normalized, policies: { ...normalized.policies } };
 }
 
 export function buildPlanInput(source: PlannerSource, today: ISODate): PlanInput {

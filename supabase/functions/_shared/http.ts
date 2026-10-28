@@ -14,6 +14,7 @@ const STATUS: Record<ErrorCode, number> = {
   too_large: 413,
   unsupported_file: 415,
   ai_refused: 422,
+  apple_reauth_required: 409,
   internal: 500,
 };
 

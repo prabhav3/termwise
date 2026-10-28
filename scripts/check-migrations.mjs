@@ -332,6 +332,88 @@ JSON.stringify(tampered.policies) === '{"drop_policy":"Lowest quiz","unannounced
   ? ok('import keeps only well-typed grade-scale entries and known policy keys')
   : fail(`imported tampered course: ${JSON.stringify(tampered)}`);
 
+// --- 20261028000300_calendar_columns.sql ------------------------------------------
+// Google / Outlook container ids are written only by the service role (calendar-sync,
+// calendar-oauth-finish); Apple rows keep them app-writable for the on-device sync.
+async function asServiceRole(fn) {
+  await db.exec(`set role service_role;`);
+  try {
+    return await fn();
+  } finally {
+    await db.exec(`reset role;`);
+  }
+}
+
+async function expectGuarded(promise, label) {
+  try {
+    await promise;
+    fail(`${label}: expected the container guard to refuse it`);
+  } catch (e) {
+    /managed by Termwise/.test(e.message) ? ok(label) : fail(`${label}: failed for another reason (${e.message})`);
+  }
+}
+
+const appleConn = await asUser(db, U1, async () => {
+  const r = await db.query(
+    `insert into public.calendar_connections (provider, device_id, external_calendar_id) values ('apple', 'device-1', 'ek-cal') returning id`,
+  );
+  await db.query(`update public.calendar_connections set task_list_id = 'ek-list', external_calendar_id = 'ek-cal-2' where id = $1`, [
+    r.rows[0].id,
+  ]);
+  return r.rows[0].id;
+});
+ok('students can still set Apple calendar / list ids');
+
+await asUser(db, U1, () =>
+  expectGuarded(
+    db.query(`insert into public.calendar_connections (provider, external_calendar_id) values ('google', 'primary')`),
+    'students cannot create a Google connection that points at a calendar of their choosing',
+  ),
+);
+const googleConn = await asServiceRole(async () => {
+  const r = await db.query(
+    `insert into public.calendar_connections (user_id, provider, account_email) values ($1, 'google', 'ana@example.edu') returning id`,
+    [U1],
+  );
+  await db.query(`update public.calendar_connections set external_calendar_id = 'termwise-cal', task_list_id = 'termwise-list' where id = $1`, [
+    r.rows[0].id,
+  ]);
+  return r.rows[0].id;
+});
+ok('the service role records the Termwise calendar and task list');
+
+await asUser(db, U1, async () => {
+  await expectGuarded(
+    db.query(`update public.calendar_connections set external_calendar_id = 'primary' where id = $1`, [googleConn]),
+    'students cannot repoint the Google calendar id',
+  );
+  await expectGuarded(
+    db.query(`update public.calendar_connections set task_list_id = '@default' where id = $1`, [googleConn]),
+    'students cannot repoint the Google task list id',
+  );
+  await expectGuarded(
+    db.query(`update public.calendar_connections set external_calendar_id = null where id = $1`, [googleConn]),
+    'students cannot clear the Google calendar id',
+  );
+  const r = await db.query(
+    `update public.calendar_connections set delivery = 'task', sync_plan_blocks = true where id = $1
+     returning delivery, sync_plan_blocks, external_calendar_id, task_list_id`,
+    [googleConn],
+  );
+  const row = r.rows[0];
+  row?.delivery === 'task' && row.sync_plan_blocks === true && row.external_calendar_id === 'termwise-cal' && row.task_list_id === 'termwise-list'
+    ? ok('students can still change delivery and plan-block sync on a Google connection')
+    : fail(`delivery update returned ${JSON.stringify(row)}`);
+  await expectGuarded(
+    db.query(`update public.calendar_connections set provider = 'microsoft', device_id = '' where id = $1`, [appleConn]),
+    'students cannot turn an Apple row with ids into a cloud connection',
+  );
+  const ms = await db.query(`insert into public.calendar_connections (provider) values ('microsoft') returning external_calendar_id`);
+  ms.rows[0]?.external_calendar_id === null
+    ? ok('students can still create a cloud row without container ids')
+    : fail(`microsoft insert returned ${JSON.stringify(ms.rows[0])}`);
+});
+
 await db.close();
 if (process.exitCode) {
   console.error('\nDatabase checks FAILED');

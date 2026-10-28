@@ -60,7 +60,7 @@ function DraftItemForm({ item, componentNames, textbookTitles, onChange, onDelet
 
   return (
     <>
-      <ScrollView style={{ maxHeight: height * 0.62 }} contentContainerStyle={{ gap: spacing.md, paddingBottom: spacing.md }} keyboardShouldPersistTaps="handled">
+      <ScrollView style={{ flexShrink: 1, maxHeight: height * 0.62 }} contentContainerStyle={{ gap: spacing.md, paddingBottom: spacing.md }} keyboardShouldPersistTaps="handled">
         {item.source_quote ? (
           <Card color={lowConfidence ? 'orange' : 'surfaceAlt'} shadow="none" style={{ gap: spacing.xs }}>
             <NBText variant="label">{lowConfidence ? 'Please check — from the syllabus' : 'From the syllabus'}</NBText>

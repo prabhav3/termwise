@@ -41,7 +41,7 @@ export function StudyDaysPicker({ value, onChange }: { value: readonly number[];
         ))}
       </View>
       {warning ? (
-        <NBText variant="smallBold" color="red" accessibilityRole="alert">
+        <NBText variant="smallBold" color="danger" accessibilityRole="alert">
           {`⚠ ${warning}`}
         </NBText>
       ) : null}

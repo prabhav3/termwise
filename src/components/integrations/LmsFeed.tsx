@@ -175,7 +175,7 @@ function MappingRow({
         <NBText variant="bodyBold" style={styles.flex} numberOfLines={2}>
           {feedCourse.name}
         </NBText>
-        <NBText variant="label" color={value ? 'muted' : 'red'}>
+        <NBText variant="label" color={value ? 'muted' : 'danger'}>
           {value ? 'Matched' : '! Pick a course'}
         </NBText>
       </View>

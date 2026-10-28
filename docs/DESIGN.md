@@ -27,7 +27,8 @@ fonts, border widths, or shadows. Mode follows the system setting, with an in-ap
 | `blue` | `#4D96FF` | `#6AA8FF` | Info |
 | `green` | `#3DDC97` | `#46E3A0` | Success, "calm" |
 | `orange` | `#FF8A3D` | `#FF9A55` | Warnings, "heavy" |
-| `red` | `#FF4747` | `#FF5C5C` | Danger, red zone |
+| `red` | `#FF4747` | `#FF5C5C` | Red zone fills, destructive button fills |
+| `danger` | `#C81E1E` | `#FF5C5C` | Error and destructive **text** on `bg`/`surface` (≥ 4.5:1) |
 | `purple` | `#9B5DE5` | `#B07CFF` | Accents |
 
 Accent fills always carry `ink` text (`#111111`) in **both** modes. Bright fills with dark text keep

@@ -96,7 +96,7 @@ export function ChapterMapEditor({ rows, onChange }: { rows: ChapterRow[]; onCha
               </FieldCell>
             </FieldRow>
             <View style={[styles.footer, { gap: spacing.sm }]}>
-              <NBText variant="smallBold" color={backwards ? 'red' : 'muted'} style={styles.flex}>
+              <NBText variant="smallBold" color={backwards ? 'danger' : 'muted'} style={styles.flex}>
                 {backwards ? '⚠ Last page is before the first page' : count !== null ? `${count} pages` : 'Pages unknown'}
               </NBText>
               <IconButton

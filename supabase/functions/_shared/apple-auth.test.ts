@@ -4,6 +4,7 @@ import {
   appleCredentials,
   appleIdTokenSubject,
   AppleRequestError,
+  appleRevocationStep,
   DEFAULT_APPLE_CLIENT_ID,
   exchangeAppleCode,
   hasAppleIdentity,
@@ -124,5 +125,27 @@ describe('Apple identity checks', () => {
     expect(hasAppleIdentity(identities, '009999.zzz')).toBe(false);
     expect(hasAppleIdentity([{ provider: 'email', id: 'u1' }])).toBe(false);
     expect(hasAppleIdentity(undefined)).toBe(false);
+  });
+});
+
+describe('appleRevocationStep (account deletion)', () => {
+  const base = { storedToken: false, authorizationCode: false, skipRequested: false, credentials: true, appleIdentity: true };
+
+  it('asks for re-authorization before deleting an Apple account with no stored token', () => {
+    expect(appleRevocationStep(base)).toBe('reauth_required');
+  });
+
+  it('revokes with a stored token or a fresh code', () => {
+    expect(appleRevocationStep({ ...base, storedToken: true })).toBe('revoke');
+    expect(appleRevocationStep({ ...base, authorizationCode: true })).toBe('revoke');
+    expect(appleRevocationStep({ ...base, authorizationCode: true, skipRequested: true })).toBe('revoke');
+  });
+
+  it('never blocks deletion when revocation is impossible or declined', () => {
+    expect(appleRevocationStep({ ...base, skipRequested: true })).toBe('no_token');
+    expect(appleRevocationStep({ ...base, credentials: false })).toBe('skipped');
+    expect(appleRevocationStep({ ...base, storedToken: true, credentials: false })).toBe('skipped');
+    expect(appleRevocationStep({ ...base, appleIdentity: false })).toBe('not_linked');
+    expect(appleRevocationStep({ ...base, appleIdentity: false, credentials: false })).toBe('not_linked');
   });
 });

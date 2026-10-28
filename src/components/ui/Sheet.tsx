@@ -34,7 +34,7 @@ export function Sheet({ visible, onClose, title, children, footer }: SheetProps)
             accessibilityLabel="Close"
           />
         </Animated.View>
-        <View style={styles.anchor} pointerEvents="box-none">
+        <View style={[styles.anchor, { paddingTop: insets.top }]} pointerEvents="box-none">
           <Animated.View
             entering={SlideInDown.duration(motion.enterMs)}
             accessibilityViewIsModal
@@ -50,6 +50,10 @@ export function Sheet({ visible, onClose, title, children, footer }: SheetProps)
                 paddingTop: spacing.md,
                 paddingBottom: Math.max(insets.bottom, spacing.lg),
                 gap: spacing.md,
+                // With the keyboard up the card shrinks (its ScrollView content scrolls) instead
+                // of overflowing past the top of the screen.
+                maxHeight: '100%',
+                flexShrink: 1,
               },
               theme.shadow('lg'),
             ]}

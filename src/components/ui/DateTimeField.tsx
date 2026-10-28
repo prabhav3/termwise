@@ -106,7 +106,7 @@ function PickerField({
         <Icon name={ICON[mode].name} fallback={ICON[mode].fallback} size={18} color={colors.ink} />
       </Pressable>
       {error ? (
-        <NBText variant="smallBold" color="red" accessibilityRole="alert">
+        <NBText variant="smallBold" color="danger" accessibilityRole="alert">
           {`⚠ ${error}`}
         </NBText>
       ) : null}

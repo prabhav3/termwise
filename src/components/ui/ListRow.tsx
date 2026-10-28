@@ -44,7 +44,7 @@ export function ListRow({
     <>
       {left ? <View style={styles.side}>{left}</View> : null}
       <View style={styles.text}>
-        <NBText variant="bodyBold" color={destructive ? 'red' : undefined} dense numberOfLines={2}>
+        <NBText variant="bodyBold" color={destructive ? 'danger' : undefined} dense numberOfLines={2}>
           {title}
         </NBText>
         {subtitle ? (
@@ -67,8 +67,15 @@ export function ListRow({
   };
 
   if (!onPress) {
+    // Grouping the row into one accessibility element hides its subviews, so a Toggle (or any
+    // control) passed as `right` would be unreachable with VoiceOver: group plain rows only.
+    const grouped = !right;
     return (
-      <View accessible accessibilityLabel={accessibilityLabel} style={[styles.row, rowStyle, style]}>
+      <View
+        accessible={grouped}
+        accessibilityLabel={grouped ? accessibilityLabel : undefined}
+        style={[styles.row, rowStyle, style]}
+      >
         {content}
       </View>
     );

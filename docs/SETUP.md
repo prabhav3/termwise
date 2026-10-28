@@ -39,7 +39,9 @@ cp .env.example .env          # then fill in the two values from step 2
      Configure → primary App ID `com.prabhav3.termwise` → Save → Register → **download the `.p8`** (only once).
    - Note the **Key ID** (10 characters, on the key's page) and your **Team ID** (Membership details).
    - Set them as secrets in step 6. Without them, account deletion still works and reports that Apple
-     revocation was skipped.
+     revocation was skipped. With them, a Sign in with Apple account that has no stored Apple token (signed in
+     before the key was set, or the token exchange failed) is asked to confirm with Apple once more when it
+     deletes the account, so its tokens can still be revoked.
 6. Function secrets (generate the two random keys once and keep them; rotating `TOKEN_ENCRYPTION_KEY`
    disconnects every Canvas/Google/Outlook connection and makes stored Apple tokens unreadable):
 
@@ -74,7 +76,8 @@ Notes:
   `PARSE_EFFORT=low` is faster; a paid plan gives more headroom.
 - **Share-link web previews** (`share-preview`) render as a web page only once the project has a custom domain;
   on the default `*.supabase.co` host Supabase serves HTML as plain text. In-app share links
-  (`termwise://share/<slug>`) work regardless.
+  (`termwise://share/<slug>`) work regardless. The calendar sign-in callback (`calendar-oauth-callback`) needs
+  no custom domain: it only redirects, and its few error pages are plain text.
 
 ## 3. Calendar sync (optional)
 
@@ -140,10 +143,30 @@ ANTHROPIC_API_KEY=sk-ant-... npx deno run --allow-env --allow-net --config supab
 
 ## 7. Ship to the App Store
 
+EAS builds run in the cloud and never see your gitignored `.env`, so give EAS the two Supabase values once.
+Each build profile in `eas.json` names its EAS environment (`development`, `preview`, `production`), and the build
+inlines that environment's `EXPO_PUBLIC_*` variables; without them the app stops at launch with "Supabase is not
+configured". Both values are public by design (they ship inside the app), so plain-text visibility is fine; don't
+commit them to `eas.json`.
+
+```bash
+npx eas-cli@latest env:set --name EXPO_PUBLIC_SUPABASE_URL --value https://<your-project-ref>.supabase.co \
+  --environment production --environment preview --environment development --visibility plaintext
+npx eas-cli@latest env:set --name EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY --value sb_publishable_... \
+  --environment production --environment preview --environment development --visibility plaintext
+npx eas-cli@latest env:list --environment production   # check both are there
+```
+
+(`env:set` creates or updates a variable; older EAS CLI versions call it `env:create`, now deprecated.) If your
+preview or development builds should use a dev Supabase project, set those environments to its values instead.
+
 ```bash
 npx eas-cli@latest build --profile production --platform ios
 npx eas-cli@latest submit --platform ios
 ```
+
+The app icon, splash images and Android adaptive icon layers in `assets/images` are drawn by
+`node scripts/generate-icons.mjs` (no dependencies); re-run it after changing the mark.
 
 Already covered for review: Sign in with Apple alongside email login, in-app account deletion (Settings → Account) that
 also revokes the student's Sign in with Apple tokens (needs the Apple key from step 2.5),

@@ -2,6 +2,7 @@
 // exchange (POST https://appleid.apple.com/auth/token) and token revocation
 // (POST https://appleid.apple.com/auth/revoke). Used by apple-token (store the refresh token after
 // sign-in) and account (revoke it on deletion). Credentials are passed in by the functions.
+import type { AppleRevocationOutcome } from './api.ts';
 import { base64ToBytes, base64UrlToBytes, bytesToBase64Url, utf8Decode, utf8Encode } from './crypto.ts';
 
 const APPLE_ISSUER = 'https://appleid.apple.com';
@@ -185,6 +186,27 @@ export interface IdentityLike {
   provider: string;
   id?: string;
   identity_data?: Record<string, unknown> | null;
+}
+
+export type AppleRevocationStep = 'revoke' | 'reauth_required' | Exclude<AppleRevocationOutcome, 'revoked' | 'failed'>;
+
+/**
+ * What account deletion does about Sign in with Apple, decided before anything is deleted:
+ * revoke a stored token or one minted from a fresh authorization code; or, for an Apple account
+ * with neither while the server could revoke, ask the app to re-authorize first (unless the
+ * student chose to skip). `appleIdentity` only matters without a token or code.
+ */
+export function appleRevocationStep(input: {
+  storedToken: boolean;
+  authorizationCode: boolean;
+  skipRequested: boolean;
+  credentials: boolean;
+  appleIdentity: boolean;
+}): AppleRevocationStep {
+  if (input.storedToken || input.authorizationCode) return input.credentials ? 'revoke' : 'skipped';
+  if (!input.appleIdentity) return 'not_linked';
+  if (!input.credentials) return 'skipped';
+  return input.skipRequested ? 'no_token' : 'reauth_required';
 }
 
 /** True when the auth user has an Apple identity (optionally: for this Apple user id). */

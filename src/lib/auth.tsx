@@ -40,6 +40,11 @@ export interface AuthContextValue {
   signUp: (input: SignUpInput) => Promise<{ needsConfirmation: boolean }>;
   /** Resolves 'canceled' when the student closes the Apple sheet (not an error). */
   signInWithApple: () => Promise<'signedIn' | 'canceled'>;
+  /**
+   * Runs Sign in with Apple again (no scopes) for a fresh, single-use authorizationCode, e.g. so
+   * account deletion can revoke Apple's tokens. 'canceled' when the student closes the sheet.
+   */
+  reauthorizeWithApple: () => Promise<string | 'canceled'>;
   sendPasswordReset: (email: string) => Promise<void>;
   signOut: () => Promise<void>;
 }
@@ -257,6 +262,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         await appleToken;
         return 'signedIn';
+      },
+      reauthorizeWithApple: async () => {
+        let credential: AppleAuthentication.AppleAuthenticationCredential;
+        try {
+          credential = await AppleAuthentication.signInAsync({ requestedScopes: [] });
+        } catch (error) {
+          if (isAppleCancel(error)) return 'canceled';
+          throw new AppError('auth', "Confirming with Apple didn't finish. Please try again.", { cause: error });
+        }
+        if (!credential.authorizationCode) {
+          throw new AppError('auth', "Apple didn't return a confirmation code. Please try again.");
+        }
+        return credential.authorizationCode;
       },
       sendPasswordReset: async (email) => {
         const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {

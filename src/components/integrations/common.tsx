@@ -85,7 +85,7 @@ export function IntegrationCard({ title, subtitle, icon, fallback, tone, state, 
           {subtitle}
         </NBText>
         {note ? (
-          <NBText variant="small" color="red" dense numberOfLines={2}>
+          <NBText variant="small" color="danger" dense numberOfLines={2}>
             {`⚠ ${note}`}
           </NBText>
         ) : null}

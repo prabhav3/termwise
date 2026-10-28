@@ -169,7 +169,7 @@ export default function OnboardingScreen() {
             ))}
           </View>
           {daysError ? (
-            <NBText variant="smallBold" color="red" accessibilityRole="alert">
+            <NBText variant="smallBold" color="danger" accessibilityRole="alert">
               {`⚠ ${daysError}`}
             </NBText>
           ) : null}

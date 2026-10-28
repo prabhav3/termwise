@@ -1,15 +1,18 @@
-// account (auth: user) — POST { action: 'delete', apple_authorization_code? } ->
-// { ok: true, apple_revocation }.
+// account (auth: user) — POST { action: 'delete', apple_authorization_code?, skip_apple_revocation? }
+// -> { ok: true, apple_revocation }.
 // Deletes the caller's uploaded syllabus files, revokes their Sign in with Apple token (Apple's
 // account-deletion requirement), then deletes their auth user; every table row cascades from
-// auth.users. Files go first so a failure leaves the account intact and retryable. Apple
-// revocation never blocks deletion: a missing key or token, or an Apple error, is reported in
+// auth.users. Files go first so a failure leaves the account intact and retryable.
+// Before anything is deleted: an account that signed in with Apple but has no stored Apple token
+// gets 409 `apple_reauth_required` (when the server can revoke), so the app can re-authorize with
+// Apple and retry with the fresh code while the account still exists. Past that point Apple
+// never blocks deletion: a missing key or token, or an Apple error, is reported in
 // `apple_revocation` instead. Required by App Store guideline 5.1.1(v).
 import { type SupabaseContext, withSupabase } from '@supabase/server';
 import type { AccountDeleteResponse, AccountRequest } from '../_shared/api.ts';
 import { requireUserId } from '../_shared/auth.ts';
 import { handle, HttpError, json, readJson } from '../_shared/http.ts';
-import { revokeAppleSignIn } from './apple.ts';
+import { prepareAppleRevocation, revokeAppleSignIn } from './apple.ts';
 import { listObjectPaths, removeObjects } from './storage.ts';
 
 const BUCKET = 'syllabi';
@@ -21,7 +24,14 @@ function parseRequest(raw: unknown): AccountRequest {
   if (code !== undefined && code !== null && (typeof code !== 'string' || code.length === 0 || code.length > 2048)) {
     throw new HttpError('bad_request', 'apple_authorization_code must be the code from Sign in with Apple.');
   }
-  return typeof code === 'string' ? { action: 'delete', apple_authorization_code: code } : { action: 'delete' };
+  const skip = body.skip_apple_revocation;
+  if (skip !== undefined && skip !== null && typeof skip !== 'boolean') {
+    throw new HttpError('bad_request', 'skip_apple_revocation must be true or false.');
+  }
+  const request: AccountRequest = { action: 'delete' };
+  if (typeof code === 'string') request.apple_authorization_code = code;
+  if (skip === true) request.skip_apple_revocation = true;
+  return request;
 }
 
 async function account(req: Request, ctx: SupabaseContext): Promise<Response> {
@@ -29,12 +39,17 @@ async function account(req: Request, ctx: SupabaseContext): Promise<Response> {
   const request = parseRequest(await readJson<unknown>(req));
   const userId = requireUserId(ctx);
 
+  const apple = await prepareAppleRevocation(ctx.supabaseAdmin, userId, request);
+  if (apple.kind === 'reauth_required') {
+    throw new HttpError('apple_reauth_required', 'Confirm with Apple to finish deleting your account.');
+  }
+
   // Storage objects are foldered by user id: syllabi/<uid>/<upload_id>/<n>.<ext>.
   const paths = await listObjectPaths(ctx.supabaseAdmin, BUCKET, userId);
   await removeObjects(ctx.supabaseAdmin, BUCKET, paths);
 
   // Before deleteUser: the stored Apple token cascades away with the auth user.
-  const appleRevocation = await revokeAppleSignIn(ctx.supabaseAdmin, userId, request.apple_authorization_code);
+  const appleRevocation = await revokeAppleSignIn(apple);
 
   const { error } = await ctx.supabaseAdmin.auth.admin.deleteUser(userId);
   if (error) {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { SyllabusExtraction, TocExtraction } from './extraction.ts';
+import { EXTRACTION_ITEM_KINDS, SyllabusExtraction, TERM_EVENT_KINDS, TocExtraction, WARNING_KINDS } from './extraction.ts';
 import {
   collectKeywords,
   countOptionalParameters,
@@ -9,6 +9,7 @@ import {
   MAX_UNION_PARAMETERS,
   parseStructuredOutput,
   restoreEmptyStringsAsNull,
+  restoreEnumCasing,
   sanitizeJsonSchema,
   SUPPORTED_KEYWORDS,
   toClaudeOutputSchema,
@@ -98,6 +99,15 @@ describe('SyllabusExtraction wire schema', () => {
     const days = props(props(schema).course).meeting_days as { items: JsonObject };
     expect(days.items).toEqual({ type: 'integer' });
   });
+
+  it('records every enum path for case restoration', () => {
+    const { enumValues } = toClaudeOutputSchema(SyllabusExtraction);
+    const byPath = new Map(enumValues.map((e) => [e.path.join('.'), e.values]));
+    expect([...byPath.keys()].sort()).toEqual(['items.*.kind', 'term_events.*.kind', 'warnings.*.kind']);
+    expect(byPath.get('items.*.kind')).toEqual([...EXTRACTION_ITEM_KINDS]);
+    expect(byPath.get('term_events.*.kind')).toEqual([...TERM_EVENT_KINDS]);
+    expect(byPath.get('warnings.*.kind')).toEqual([...WARNING_KINDS]);
+  });
 });
 
 describe('sanitizeJsonSchema', () => {
@@ -181,8 +191,47 @@ describe('restoreEmptyStringsAsNull', () => {
   });
 });
 
+describe('restoreEnumCasing', () => {
+  it('maps case-only mismatches to the schema value, through arrays, nested paths and consts', () => {
+    const { enumValues } = sanitizeJsonSchema({
+      type: 'object',
+      properties: {
+        mode: { anyOf: [{ type: 'string', enum: ['fast', 'slow'] }, { type: 'null' }] },
+        tags: { type: 'array', items: { type: 'string', enum: ['Biology', 'Chemistry'] } },
+        rows: { type: 'array', items: { type: 'object', properties: { kind: { type: 'string', const: 'no_class' } } } },
+      },
+    });
+    const value = { mode: 'FAST', tags: ['biology', 'CHEMISTRY', 'Physics'], rows: [{ kind: 'No_Class' }, { kind: 'no_class' }, {}] };
+    restoreEnumCasing(value, enumValues);
+    expect(value).toEqual({ mode: 'fast', tags: ['Biology', 'Chemistry', 'Physics'], rows: [{ kind: 'no_class' }, { kind: 'no_class' }, {}] });
+  });
+
+  it('leaves exact, ambiguous, non-string and null values alone', () => {
+    const enums = [{ path: ['a'], values: ['Topic 3', 'topic 3'] }, { path: ['b'], values: ['x'] }, { path: ['c'], values: ['x'] }];
+    const value = { a: 'TOPIC 3', b: 7, c: null };
+    restoreEnumCasing(value, enums);
+    expect(value).toEqual({ a: 'TOPIC 3', b: 7, c: null });
+    const exact = { a: 'topic 3' };
+    expect(restoreEnumCasing(exact, enums)).toEqual({ a: 'topic 3' });
+  });
+});
+
 describe('parseStructuredOutput', () => {
   const output = toClaudeOutputSchema(TocExtraction);
+
+  it('accepts enum values whose capitalization drifted', () => {
+    const text = JSON.stringify({
+      textbook: { title: 'Biology', authors: '', edition: '', chapters: [] },
+      warnings: [
+        { kind: 'Low_Quality_Scan', message: 'Page 3 is blurry.', related_item_title: '' },
+        { kind: 'other', message: 'Check the appendix.', related_item_title: '' },
+      ],
+    });
+    const result = parseStructuredOutput(text, TocExtraction, output);
+    expect(result.ok && result.data.warnings.map((w) => w.kind)).toEqual(['low_quality_scan', 'other']);
+    const unknown = parseStructuredOutput(text.replace('Low_Quality_Scan', 'blurry'), TocExtraction, output);
+    expect(unknown).toMatchObject({ ok: false, reason: 'schema_mismatch' });
+  });
 
   it('parses, restores nulls, and validates', () => {
     const text = JSON.stringify({

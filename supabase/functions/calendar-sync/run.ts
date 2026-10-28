@@ -143,7 +143,9 @@ export async function syncConnection(deps: RunDeps, connection: ConnectionRow, c
       }
     }
     if (containerId !== knownId) {
-      await updateConnection(deps.userDb, connection.id, kind === 'event' ? { external_calendar_id: containerId } : { task_list_id: containerId });
+      // Service role: the app can't set these ids (20261028000300_calendar_columns.sql), so the
+      // container calendar-sync writes into is always one it found or created itself.
+      await updateConnection(deps.adminDb, connection.id, kind === 'event' ? { external_calendar_id: containerId } : { task_list_id: containerId });
     }
 
     // 2. Plan.

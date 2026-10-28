@@ -73,7 +73,8 @@ function RootNavigator({ fontsReady }: { fontsReady: boolean }) {
         <Stack
           screenOptions={{
             headerShown: true,
-            headerTitle: '',
+            // `title`, not `headerTitle`: a string headerTitle wins over every screen's own title.
+            title: '',
             headerShadowVisible: false,
             headerBackButtonDisplayMode: 'minimal',
             headerTintColor: colors.ink,

@@ -1,6 +1,6 @@
 import { queryOptions, useMutation, useQueryClient } from '@tanstack/react-query';
 
-import { deleteAccount } from '@/lib/functions';
+import { deleteAccount, type DeleteAccountOptions } from '@/lib/functions';
 import { cancelTriageNotifications } from '@/lib/notifications';
 import { supabase } from '@/lib/supabase';
 import type { Profile } from '@/types/db';
@@ -59,13 +59,15 @@ export function useUpdateProfile() {
  * Permanently deletes the account (files, rows, auth user), then ends the local session; the
  * auth guard takes the student back to sign-in.
  */
+/** Resolves with the server's answer (`apple_revocation` says what happened with Apple). */
 export function useDeleteAccount() {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: async () => {
-      await deleteAccount();
+    mutationFn: async (options: DeleteAccountOptions = {}) => {
+      const result = await deleteAccount(options);
       await cancelTriageNotifications();
       await supabase.auth.signOut({ scope: 'local' });
+      return result;
     },
     onSuccess: () => client.clear(),
   });

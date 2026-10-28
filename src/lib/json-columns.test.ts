@@ -1,10 +1,20 @@
 import { describe, expect, it } from 'vitest';
 
+import { letterForCourse, targetCutoffs, toGradeCourse } from '@/components/grades/model';
 import { buildPlan } from '@/engine';
-import { makeInput, makeItem, makeReading, makeTextbook } from '@/engine/__tests__/fixtures';
+import { makeCourse, makeInput, makeItem, makeReading, makeTextbook } from '@/engine/__tests__/fixtures';
 import type { EngineItem, EngineTextbook } from '@/engine';
+import type { Course } from '@/types/db';
 
-import { normalizeChapters, normalizeItemRow, normalizeReading, normalizeTextbookRow } from './json-columns';
+import {
+  normalizeChapters,
+  normalizeCourseRow,
+  normalizeGradeScale,
+  normalizeItemRow,
+  normalizePolicies,
+  normalizeReading,
+  normalizeTextbookRow,
+} from './json-columns';
 
 describe('normalizeReading', () => {
   it('keeps a well-formed reading as is', () => {
@@ -91,5 +101,79 @@ describe('normalized rows reach the planner safely', () => {
     const result = buildPlan(input);
     // The chapter list still plans at the default pages per chapter.
     expect(result.blocks.some((block) => block.item_id === 'i2' && block.kind === 'reading')).toBe(true);
+  });
+});
+
+describe('normalizeGradeScale', () => {
+  it('keeps a well-formed scale as is', () => {
+    const scale = [
+      { letter: 'A', min: 93 },
+      { letter: 'B+', min: 87.5 },
+      { letter: 'F', min: 0 },
+    ];
+    expect(normalizeGradeScale(scale)).toEqual(scale);
+  });
+
+  it('is [] for anything but an array', () => {
+    for (const value of [null, undefined, 'A', 90, true, {}, { A: 90 }]) {
+      expect(normalizeGradeScale(value)).toEqual([]);
+    }
+  });
+
+  it('drops malformed cutoffs and reads numeric strings', () => {
+    expect(
+      normalizeGradeScale([
+        { letter: 'A', min: '90' },
+        { letter: 5, min: 80 },
+        { letter: '  ', min: 70 },
+        { letter: 'C', min: Number.NaN },
+        { letter: 'D', min: 'sixty' },
+        { letter: 'D-', min: '' },
+        null,
+        'F',
+        { letter: ' B ', min: 80 },
+      ]),
+    ).toEqual([
+      { letter: 'A', min: 90 },
+      { letter: 'B', min: 80 },
+    ]);
+  });
+});
+
+describe('normalizePolicies', () => {
+  it('keeps well-formed policies as is', () => {
+    const policies = { late_policy: '10% a day', unannounced_quizzes: true, attendance_policy: null, drop_policy: 'Lowest quiz' };
+    expect(normalizePolicies(policies)).toEqual(policies);
+    expect(normalizePolicies({})).toEqual({});
+  });
+
+  it('is {} for anything but an object', () => {
+    for (const value of [null, undefined, 'none', 3, true, [], [{ late_policy: 'x' }]]) {
+      expect(normalizePolicies(value)).toEqual({});
+    }
+  });
+
+  it('drops mistyped fields and unknown keys', () => {
+    expect(
+      normalizePolicies({ late_policy: 10, unannounced_quizzes: 'yes', extra_credit: ['x'], drop_policy: 'Lowest lab', other: 1 }),
+    ).toEqual({ drop_policy: 'Lowest lab' });
+  });
+});
+
+describe('normalized courses reach the grade screens safely', () => {
+  // A classmate's shared timeline copies these jsonb values verbatim.
+  const row = (grade_scale: unknown, policies: unknown = {}) =>
+    ({ ...makeCourse(), grade_scale, policies }) as unknown as Course;
+
+  it('a malformed grade_scale would throw in the grade helpers', () => {
+    const raw = row(null) as unknown as Parameters<typeof targetCutoffs>[0];
+    expect(() => targetCutoffs(raw)).toThrow();
+    expect(() => letterForCourse(85, row([{ letter: 5, min: 80 }]) as unknown as Parameters<typeof letterForCourse>[1])).toThrow();
+  });
+
+  it('grades work once the row is normalized (toGradeCourse normalizes)', () => {
+    expect(letterForCourse(85, toGradeCourse(row(null, 'oops')))).not.toBeNull();
+    expect(letterForCourse(85, toGradeCourse(row([{ letter: 5, min: 80 }, { letter: 'B', min: 80 }])))).toBe('B');
+    expect(normalizeCourseRow(row({ A: 90 }, null))).toMatchObject({ grade_scale: [], policies: {} });
   });
 });

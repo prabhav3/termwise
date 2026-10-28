@@ -5,6 +5,7 @@ import {
   compactText,
   decodeEntities,
   DOCX_MIME,
+  filesApiFileName,
   htmlToText,
   INLINE_PAYLOAD_LIMIT_BYTES,
   looksLikeHtml,
@@ -56,6 +57,40 @@ describe('payload sizing', () => {
     expect(shouldUseFilesApi([justUnder], 0)).toBe(false);
     expect(shouldUseFilesApi([justUnder], 100)).toBe(true);
     expect(shouldUseFilesApi([20 * 1024 * 1024], 0)).toBe(true);
+  });
+});
+
+describe('filesApiFileName', () => {
+  // The Files API answers 400 "Invalid file name" for these characters (and U+0000–U+001F).
+  const FORBIDDEN = /[<>:"|?*\\/\u0000-\u001f]/;
+
+  it('replaces forbidden characters and keeps the extension', () => {
+    expect(filesApiFileName('PSY 101: Syllabus.pdf', 'application/pdf')).toBe('PSY 101_ Syllabus.pdf');
+    expect(filesApiFileName('Syllabus "Final"?.PDF', 'application/pdf')).toBe('Syllabus _Final__.pdf');
+    expect(filesApiFileName('a<b>c|d*e\\f/g\u0007h.jpg', 'image/jpeg')).toBe('a_b_c_d_e_f_g_h.jpg');
+    expect(filesApiFileName('Week 3 — Lecture Notes.png', 'image/png')).toBe('Week 3 — Lecture Notes.png');
+  });
+
+  it('adds an extension from the media type and names empty stems', () => {
+    expect(filesApiFileName('Syllabus', 'application/pdf')).toBe('Syllabus.pdf');
+    expect(filesApiFileName('???.pdf', 'application/pdf')).toBe('document.pdf');
+    expect(filesApiFileName('  ', 'image/webp')).toBe('document.webp');
+    expect(filesApiFileName('.pdf', 'application/pdf')).toBe('document.pdf');
+    expect(filesApiFileName('Скан программы.jpg', 'image/jpeg')).toBe('Скан программы.jpg');
+  });
+
+  it('stays within the length limit without splitting characters', () => {
+    const long = filesApiFileName(`${'x'.repeat(400)}.pdf`, 'application/pdf');
+    expect(long).toBe(`${'x'.repeat(200)}.pdf`);
+    const wide = filesApiFileName(`${'📘'.repeat(100)}.pdf`, 'application/pdf');
+    expect(wide).toBe(`${'📘'.repeat(50)}.pdf`);
+    for (const name of [long, wide, filesApiFileName(`${'é'.repeat(300)}:${'/'.repeat(9)}`, 'image/png')]) {
+      expect(name.length).toBeGreaterThan(0);
+      expect(name.length).toBeLessThanOrEqual(255);
+      expect(name).not.toMatch(FORBIDDEN);
+      // No lone surrogate halves (they would not survive UTF-8 encoding).
+      expect(new TextDecoder().decode(new TextEncoder().encode(name))).toBe(name);
+    }
   });
 });
 

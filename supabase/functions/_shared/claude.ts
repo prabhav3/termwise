@@ -3,6 +3,7 @@
 // "@anthropic-ai/sdk" import-map entry; uses no Deno globals so scripts can reuse it.
 
 import Anthropic, { toFile } from '@anthropic-ai/sdk';
+import { filesApiFileName } from './documents.ts';
 import type { ErrorCode } from './http.ts';
 import type { JsonObject } from './json-schema.ts';
 
@@ -97,9 +98,12 @@ export function usageSummary(message: BetaMessage, extra: { requested_model: str
   };
 }
 
-/** Upload one file for this request; it expires after an hour even if cleanup fails. */
+/**
+ * Upload one file for this request; it expires after an hour even if cleanup fails. `name` is
+ * the student's file name; it is sanitized for the Files API, which rejects some characters.
+ */
 export async function uploadFileForClaude(client: Anthropic, bytes: Uint8Array, name: string, mime: string): Promise<string> {
-  const file = await toFile(bytes, name, { type: mime });
+  const file = await toFile(bytes, filesApiFileName(name, mime), { type: mime });
   const meta = await client.files.upload({ file, expires_in_seconds: 3600 });
   return meta.id;
 }

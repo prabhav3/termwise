@@ -122,7 +122,7 @@ ${meta.length > 0 ? `<p class="meta">${escapeHtml(meta.join(' · '))}</p>` : ''}
 ${upcoming}
 </section>
 <a class="button display" href="${escapeHtml(appUrl)}">Open in Termwise</a>
-<p class="note">${escapeHtml(imported)}Importing copies the dates and weights into your own plan. Grades and notes are never shared.</p>`;
+<p class="note">${escapeHtml(imported)}Importing copies the course’s dates, weights, and item details into your own plan. The sharer’s grades, progress, and “My notes” are never shared.</p>`;
   return htmlDocument(`${heading} · Termwise`, description, body);
 }
 

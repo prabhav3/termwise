@@ -14,6 +14,7 @@ import {
   type GradeCutoff,
   type RequiredScore,
 } from '@/engine';
+import { normalizeCourseRow } from '@/lib/json-columns';
 import type { Course } from '@/types/db';
 
 /** Weights within this many points of 100 count as "adding up". */
@@ -27,7 +28,9 @@ export const MAX_ENTRY_PERCENT = 150;
 
 /** DB course row -> engine course (policies gets an index signature). */
 export function toGradeCourse(course: Course): EngineCourse {
-  return { ...course, policies: { ...course.policies } };
+  // A malformed grade_scale must not crash the tracker or "What do I need?".
+  const normalized = normalizeCourseRow(course);
+  return { ...normalized, policies: { ...normalized.policies } };
 }
 
 /** The course's letter scale, highest cutoff first (default scale when the course has none). */

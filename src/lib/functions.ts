@@ -224,15 +224,23 @@ export function lmsSync(request: Omit<Extract<LmsSyncRequest, { action: 'sync' }
 
 // ---- account --------------------------------------------------------------------------------
 
+export interface DeleteAccountOptions {
+  /** A fresh Sign in with Apple authorizationCode, so the server can revoke without a stored token. */
+  appleAuthorizationCode?: string;
+  /** The student declined re-authorizing with Apple: delete anyway (`apple_revocation: 'no_token'`). */
+  skipAppleRevocation?: boolean;
+}
+
 /**
  * Permanently deletes the caller's files and account (App Store guideline 5.1.1(v)) and revokes
- * their Sign in with Apple token. Pass a fresh Apple authorizationCode when the account has no
- * stored Apple token (a previous answer of `apple_revocation: 'no_token'`).
+ * their Sign in with Apple token. A Sign in with Apple account with no stored Apple token gets
+ * AppError `apple_reauth_required` (nothing deleted): run Sign in with Apple again and retry with
+ * `appleAuthorizationCode`, or with `skipAppleRevocation` when the student declines.
  */
-export function deleteAccount(options: { appleAuthorizationCode?: string } = {}): Promise<AccountDeleteResponse> {
-  const request: AccountRequest = options.appleAuthorizationCode
-    ? { action: 'delete', apple_authorization_code: options.appleAuthorizationCode }
-    : { action: 'delete' };
+export function deleteAccount(options: DeleteAccountOptions = {}): Promise<AccountDeleteResponse> {
+  const request: AccountRequest = { action: 'delete' };
+  if (options.appleAuthorizationCode) request.apple_authorization_code = options.appleAuthorizationCode;
+  if (options.skipAppleRevocation) request.skip_apple_revocation = true;
   return invoke('account', request);
 }
 

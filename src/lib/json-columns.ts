@@ -1,7 +1,7 @@
 // jsonb columns hold whatever was written: RLS lets an owner store any JSON, and a shared
 // timeline import copies a classmate's values. Rows are reshaped to their declared types on read
 // so one malformed value can't crash the planner (buildPlan) or a screen.
-import type { Chapter, Item, PageRange, ReadingRef, Textbook } from '@/types/db';
+import type { Chapter, Course, CoursePolicies, GradeCutoff, Item, PageRange, ReadingRef, Textbook } from '@/types/db';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -55,6 +55,41 @@ export function normalizeChapters(value: unknown): Chapter[] {
       },
     ];
   });
+}
+
+/** A finite number, or a numeric string ("90") as its number. */
+function numericOrNull(value: unknown): number | null {
+  if (typeof value === 'string' && value.trim() !== '') return numberOrNull(Number(value));
+  return numberOrNull(value);
+}
+
+/** courses.grade_scale: the cutoffs with a letter and a finite minimum percent, else []. */
+export function normalizeGradeScale(value: unknown): GradeCutoff[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry): GradeCutoff[] => {
+    if (!isRecord(entry)) return [];
+    const letter = stringOrNull(entry.letter)?.trim();
+    const min = numericOrNull(entry.min);
+    return letter && min !== null ? [{ letter, min }] : [];
+  });
+}
+
+const POLICY_TEXT_KEYS = ['late_policy', 'attendance_policy', 'drop_policy', 'extra_credit'] as const;
+
+/** courses.policies: {} unless it is an object; only well-typed fields are kept (all are optional). */
+export function normalizePolicies(value: unknown): CoursePolicies {
+  if (!isRecord(value)) return {};
+  const policies: CoursePolicies = {};
+  for (const key of POLICY_TEXT_KEYS) {
+    const text = value[key];
+    if (typeof text === 'string' || text === null) policies[key] = text;
+  }
+  if (typeof value.unannounced_quizzes === 'boolean') policies.unannounced_quizzes = value.unannounced_quizzes;
+  return policies;
+}
+
+export function normalizeCourseRow<T extends Pick<Course, 'grade_scale' | 'policies'>>(course: T): T {
+  return { ...course, grade_scale: normalizeGradeScale(course.grade_scale), policies: normalizePolicies(course.policies) };
 }
 
 export function normalizeItemRow<T extends Pick<Item, 'reading'>>(item: T): T {
