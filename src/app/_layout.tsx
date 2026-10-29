@@ -83,15 +83,17 @@ function RootNavigator({ fontsReady }: { fontsReady: boolean }) {
             contentStyle: { backgroundColor: colors.bg },
           }}
         >
-          <Stack.Protected guard={!signedIn || profilePending}>
+          {/* Explicit redirects: the default fallback lands on the bare `/(auth)` group, which has
+              no index screen and shows "Unmatched route". */}
+          <Stack.Protected guard={!signedIn || profilePending} redirectTo="/">
             <Stack.Screen name="(auth)" options={{ headerShown: false }} />
           </Stack.Protected>
 
-          <Stack.Protected guard={needsOnboarding}>
+          <Stack.Protected guard={needsOnboarding} redirectTo={signedIn ? '/' : '/sign-in'}>
             <Stack.Screen name="onboarding" options={{ headerShown: false, gestureEnabled: false }} />
           </Stack.Protected>
 
-          <Stack.Protected guard={inApp}>
+          <Stack.Protected guard={inApp} redirectTo={needsOnboarding ? '/onboarding' : '/sign-in'}>
             <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
             <Stack.Screen name="upload" options={{ presentation: 'modal' }} />
             <Stack.Screen name="focus" options={{ presentation: 'fullScreenModal', headerShown: false }} />
