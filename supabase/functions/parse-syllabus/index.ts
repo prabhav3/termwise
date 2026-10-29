@@ -15,6 +15,8 @@ declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void };
 
 /** A 'processing' row older than this is treated as abandoned (paid wall-clock limit is 400 s). */
 const STALE_AFTER_MS = 6 * 60 * 1000;
+/** Paid Claude runs one student may start in 24 hours (each costs real money). */
+const DAILY_PARSE_LIMIT = 20;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 addEventListener('beforeunload', () => failActiveJobs());
@@ -66,6 +68,31 @@ async function claim(ctx: SupabaseContext, uploadId: string, startedAt: string, 
   if (!data || data.length === 0) throw new HttpError('conflict', "We're already reading this upload.");
 }
 
+/**
+ * Refuse once the student hit DAILY_PARSE_LIMIT runs, else log this run.
+ * shortcut: count-then-insert lets parallel requests slip a few past the cap; move into one SQL function if that matters.
+ */
+async function recordParseRun(ctx: SupabaseContext, userId: string, uploadId: string, now: number): Promise<void> {
+  const since = new Date(now - 24 * 60 * 60 * 1000).toISOString();
+  const { count, error } = await ctx.supabaseAdmin
+    .from('parse_runs')
+    .select('id', { count: 'exact', head: true })
+    .eq('user_id', userId)
+    .gte('started_at', since);
+  if (error) {
+    console.error(`parse-syllabus: run count failed (${error.code})`);
+    throw new HttpError('internal', "We couldn't start reading this upload. Please try again.");
+  }
+  if ((count ?? 0) >= DAILY_PARSE_LIMIT) {
+    throw new HttpError('rate_limited', `You've read ${DAILY_PARSE_LIMIT} documents in the last 24 hours. Try again tomorrow.`);
+  }
+  const { error: insertError } = await ctx.supabaseAdmin.from('parse_runs').insert({ user_id: userId, upload_id: uploadId });
+  if (insertError) {
+    console.error(`parse-syllabus: run log failed (${insertError.code})`);
+    throw new HttpError('internal', "We couldn't start reading this upload. Please try again.");
+  }
+}
+
 async function parseSyllabus(req: Request, ctx: SupabaseContext): Promise<Response> {
   if (req.method !== 'POST') throw new HttpError('bad_request', 'Use POST.', 405);
   const userId = requireUserId(ctx);
@@ -82,6 +109,7 @@ async function parseSyllabus(req: Request, ctx: SupabaseContext): Promise<Respon
     throw new HttpError('conflict', "We're already reading this upload.");
   }
   await validateInputs(ctx, upload, userId);
+  await recordParseRun(ctx, userId, uploadId, now);
 
   const startedAt = new Date(now).toISOString();
   await claim(ctx, uploadId, startedAt, new Date(now - STALE_AFTER_MS).toISOString());

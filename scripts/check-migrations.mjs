@@ -414,6 +414,38 @@ await asUser(db, U1, async () => {
     : fail(`microsoft insert returned ${JSON.stringify(ms.rows[0])}`);
 });
 
+// --- 20261028000400_parse_runs: the paid-parse log is service-role only ---------------------
+await db.query(`insert into public.parse_runs (user_id) values ($1)`, [U1]);
+await asUser(db, U1, async () => {
+  await expectError(db.query('select * from public.parse_runs'), 'students cannot read the parse-run log');
+  await expectError(db.query('delete from public.parse_runs'), 'students cannot erase their parse runs');
+  await expectError(
+    db.query(`insert into public.parse_runs (user_id) values ($1)`, [U1]),
+    'students cannot write parse runs themselves',
+  );
+});
+
+// --- 20261028000500_plan_block_guard: a stale replan can't revive a finished block ----------
+await asUser(db, U1, async () => {
+  const item = await db.query(`select id, course_id from public.items where course_id = $1 limit 1`, [courseId]);
+  const { id: itemId, course_id } = item.rows[0];
+  await db.query(
+    `insert into public.plan_blocks (item_id, course_id, key, date, minutes, kind, label, status)
+     values ($1, $2, 'guard:0', '2026-11-02', 30, 'work', 'Work', 'done')`,
+    [itemId, course_id],
+  );
+  const r = await db.query(
+    `insert into public.plan_blocks (item_id, course_id, key, date, minutes, kind, label, status)
+     values ($1, $2, 'guard:0', '2026-11-03', 45, 'work', 'Work', 'planned')
+     on conflict (user_id, key) do update set status = excluded.status, date = excluded.date, minutes = excluded.minutes
+     returning status, date::text`,
+    [itemId, course_id],
+  );
+  r.rows[0]?.status === 'done' && r.rows[0].date === '2026-11-02'
+    ? ok('a stale planned upsert leaves a done block untouched')
+    : fail(`guarded upsert returned ${JSON.stringify(r.rows[0])}`);
+});
+
 await db.close();
 if (process.exitCode) {
   console.error('\nDatabase checks FAILED');
