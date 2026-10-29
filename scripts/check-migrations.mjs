@@ -12,6 +12,10 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const migrationsDir = join(root, 'supabase', 'migrations');
 
 const STUBS = `
+-- Like Supabase: extensions live in their own schema, outside the migrations' search_path.
+create schema extensions;
+create extension pgcrypto with schema extensions;
+
 create role anon nologin;
 create role authenticated nologin;
 create role service_role nologin bypassrls;

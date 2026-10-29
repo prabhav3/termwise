@@ -434,7 +434,9 @@ create table public.shared_timelines (
   id uuid primary key default gen_random_uuid(),
   owner_id uuid not null default auth.uid() references auth.users (id) on delete cascade,
   course_id uuid not null unique references public.courses (id) on delete cascade,
-  slug text not null unique default encode(gen_random_bytes(6), 'hex'),
+  -- 12 hex chars (48 random bits) from core gen_random_uuid(); Supabase keeps pgcrypto's
+  -- gen_random_bytes in the `extensions` schema, which migrations don't search.
+  slug text not null unique default substr(replace(gen_random_uuid()::text, '-', ''), 1, 12),
   snapshot jsonb not null,
   revoked boolean not null default false,
   import_count integer not null default 0,
